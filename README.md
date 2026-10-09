@@ -279,8 +279,16 @@ docker run -p 8000:8000 -e HOOKSCOPE_SECRET_GITHUB=dev-secret -v hookscope-data:
 | `HOOKSCOPE_SECRET_SVIX` | Svix / Standard Webhooks endpoint secret (`whsec_...`) | unset |
 | `HOOKSCOPE_SECRET_GENERIC` | Shared secret for `X-Signature` | unset |
 | `HOOKSCOPE_RULES` | Path to a JSON file of forwarding rules | unset (no forwarding) |
+| `HOOKSCOPE_RETENTION_DAYS` | Delete events older than this many days (decimals allowed) | unset (keep forever) |
+| `HOOKSCOPE_MAX_EVENTS` | Keep only the newest N events | unset (no cap) |
+| `HOOKSCOPE_PURGE_INTERVAL_SECONDS` | Minimum time between automatic purges | `300` |
 
 A source without a secret accepts every delivery and marks it `no_secret`.
+
+Retention runs in the background after incoming deliveries, at most once per purge
+interval, and removes expired events together with their forward attempts. A burst can
+briefly exceed `HOOKSCOPE_MAX_EVENTS` until the next purge; set the interval to `0` to
+enforce the limits after every delivery. Invalid values stop the app at startup.
 
 Twilio signs the exact public URL it calls, so behind a reverse proxy or TLS terminator
 run uvicorn with `--proxy-headers --forwarded-allow-ips='*'` (or your proxy's IP) so the
