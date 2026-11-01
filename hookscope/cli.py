@@ -130,6 +130,10 @@ def build_parser() -> argparse.ArgumentParser:
     verify_parser.add_argument("--body", required=True, help="path to the raw request body")
     verify_parser.add_argument("--headers", required=True, help="path to a JSON object of headers")
     verify_parser.add_argument("--url", default="", help="original request URL, required for Twilio")
+    commands.add_parser(
+        "config",
+        help="show effective configuration with secrets masked",
+    )
     return parser
 
 
@@ -413,6 +417,23 @@ def verify_saved(args: argparse.Namespace) -> int:
     return 0 if result.status == "valid" else 2
 
 
+def show_config(args: argparse.Namespace) -> int:
+    """Show parsed settings without revealing passwords or provider secrets."""
+    from dataclasses import asdict
+
+    try:
+        settings = Settings.from_env()
+    except ConfigError as error:
+        print(f"hookscope: {error}", file=sys.stderr)
+        return 2
+
+    values = asdict(settings)
+    values["secrets"] = {source: "********" for source in settings.secrets}
+    values["admin_password"] = "********" if settings.admin_password else None
+    print(json.dumps(values, indent=2, sort_keys=True))
+    return 0
+
+
 def apply_overrides(args: argparse.Namespace, env: dict[str, str] | os._Environ[str] = os.environ) -> None:
     """Put the flags that were given into the environment, so the app reads one source of truth."""
     for attribute, variable in OVERRIDES.items():
@@ -461,5 +482,11 @@ def serve(args: argparse.Namespace) -> int:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    handlers = {"send": send, "tail": tail, "replay": replay, "verify": verify_saved}
+    handlers = {
+        "send": send,
+        "tail": tail,
+        "replay": replay,
+        "verify": verify_saved,
+        "config": show_config,
+    }
     return handlers.get(args.command, serve)(args)
