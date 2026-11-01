@@ -118,6 +118,18 @@ def build_parser() -> argparse.ArgumentParser:
     replay.add_argument("--to", required=True, metavar="URL", help="where to send it (an http(s) URL)")
     replay.add_argument("--url", default="http://127.0.0.1:8000", help="where HookScope runs")
     replay.add_argument("--json", action="store_true", help="print the API's answer as JSON")
+    verify_parser = commands.add_parser(
+        "verify",
+        help="verify a saved webhook request offline",
+        description=(
+            "Check the exact bytes in a body file against saved headers. "
+            "Set HOOKSCOPE_SECRET_<PROVIDER> to the signing secret."
+        ),
+    )
+    verify_parser.add_argument("provider", choices=sorted(PROVIDERS))
+    verify_parser.add_argument("--body", required=True, help="path to the raw request body")
+    verify_parser.add_argument("--headers", required=True, help="path to a JSON object of headers")
+    verify_parser.add_argument("--url", default="", help="original request URL, required for Twilio")
     return parser
 
 
@@ -351,6 +363,56 @@ def replay(args: argparse.Namespace, send_request: Callable = post) -> int:
     return 0 if answer["ok"] else 1
 
 
+def verify_saved(args: argparse.Namespace) -> int:
+    """Verify saved bytes and report a diagnosis without contacting a server."""
+    from pathlib import Path
+
+    from .diagnostics import Delivery, diagnose
+    from .providers import verify
+
+    secret_name = f"HOOKSCOPE_SECRET_{args.provider.upper()}"
+    secret = os.environ.get(secret_name)
+    if not secret:
+        print(f"hookscope: set {secret_name} before verifying", file=sys.stderr)
+        return 2
+    if args.provider == "twilio" and not args.url:
+        print("hookscope: --url is required for Twilio verification", file=sys.stderr)
+        return 2
+
+    try:
+        body = Path(args.body).read_bytes()
+        headers = json.loads(Path(args.headers).read_text(encoding="utf-8"))
+        if not isinstance(headers, dict) or not all(
+            isinstance(key, str) and isinstance(value, str)
+            for key, value in headers.items()
+        ):
+            raise ValueError("headers must be a JSON object with string keys and values")
+    except (OSError, UnicodeError, ValueError) as error:
+        print(f"hookscope: cannot read saved request: {error}", file=sys.stderr)
+        return 2
+
+    result = verify(args.provider, body, headers, secret, url=args.url)
+    print(f"verification: {result.status}")
+    if result.reason:
+        print(f"reason: {result.reason}")
+    if result.rejected:
+        diagnosis = diagnose(
+            Delivery(
+                source=args.provider,
+                body=body,
+                headers=headers,
+                secret=secret,
+                url=args.url,
+                result=result,
+            )
+        )
+        if diagnosis:
+            print(f"diagnosis: {diagnosis.message}")
+            print(f"fix: {diagnosis.fix}")
+        return 1
+    return 0 if result.status == "valid" else 2
+
+
 def apply_overrides(args: argparse.Namespace, env: dict[str, str] | os._Environ[str] = os.environ) -> None:
     """Put the flags that were given into the environment, so the app reads one source of truth."""
     for attribute, variable in OVERRIDES.items():
@@ -399,5 +461,5 @@ def serve(args: argparse.Namespace) -> int:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    handlers = {"send": send, "tail": tail, "replay": replay}
+    handlers = {"send": send, "tail": tail, "replay": replay, "verify": verify_saved}
     return handlers.get(args.command, serve)(args)
