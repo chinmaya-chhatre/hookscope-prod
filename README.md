@@ -1,6 +1,6 @@
 # HookScope
 
-![CI](https://github.com/chinmaya-chhatre/hookscope-prod/actions/workflows/ci.yml/badge.svg)
+[![CI](https://github.com/chinmaya-chhatre/hookscope-prod/actions/workflows/ci.yml/badge.svg)](https://github.com/chinmaya-chhatre/hookscope-prod/actions/workflows/ci.yml)
 
 **Capture, verify and inspect incoming webhooks.** HookScope is a small self-hosted
 tool for debugging webhook integrations: point a provider (GitHub, Stripe, or
