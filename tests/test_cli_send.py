@@ -66,7 +66,9 @@ def test_the_bad_scenarios_are_rejected_and_stored(server, provider, scenario, c
 
 
 @pytest.mark.parametrize("provider", TIMESTAMPED)
-def test_a_stale_timestamp_is_diagnosed_as_old(server, provider):
+def test_a_stale_timestamp_is_diagnosed_as_old(server, provider, monkeypatch):
+    now = time.time()
+    monkeypatch.setattr(time, "time", lambda: now)
     assert send(provider, "--scenario", "stale-timestamp") == 0
     [event] = events(server)
     assert event["reason"].startswith("timestamp outside tolerance")
