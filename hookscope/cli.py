@@ -139,6 +139,10 @@ def build_parser() -> argparse.ArgumentParser:
     purge_parser.add_argument("--older-than", help="delete events before this ISO timestamp")
     purge_parser.add_argument("--keep-last", type=int, help="number of newest events to retain")
     purge_parser.add_argument("--json", action="store_true", help="print the API response as JSON")
+    export_parser = commands.add_parser("export", help="export stored events as NDJSON")
+    export_parser.add_argument("--url", default="http://127.0.0.1:8000")
+    export_parser.add_argument("--source", choices=sorted(PROVIDERS))
+    export_parser.add_argument("--verification", choices=("valid", "invalid", "unsigned", "no_secret"))
     return parser
 
 
@@ -494,6 +498,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "verify": verify_saved,
         "config": show_config,
         "purge": purge,
+        "export": export_events,
     }
     return handlers.get(args.command, serve)(args)
 
@@ -535,3 +540,31 @@ def purge(args: argparse.Namespace, send_request: Callable = post) -> int:
     print(json.dumps(answer) if args.json else
           f"removed {answer['removed']} events; {answer['remaining']} remaining")
     return 0
+
+
+def export_events(args: argparse.Namespace, fetch: Callable = get_json) -> int:
+    """Export newest first using immutable id cursors; concurrent new events are excluded."""
+    base = args.url.rstrip("/")
+    filters = {k: v for k, v in (("source", args.source), ("verification", args.verification)) if v}
+    before = None
+    try:
+        while True:
+            page = fetch_page(base, filters, before, fetch)
+            ids = [event.get("id") for event in page if isinstance(event, dict)]
+            if (
+                len(ids) != len(page)
+                or any(type(value) is not int or value <= 0 for value in ids)
+                or any(a <= b for a, b in zip(ids, ids[1:]))
+                or (before is not None and any(value >= before for value in ids))
+            ):
+                raise TailError("invalid event pagination", fatal=True)
+            for event in page:
+                print(json.dumps(event, ensure_ascii=False), flush=True)
+            if len(page) < PAGE:
+                return 0
+            before = ids[-1]
+    except TailError as error:
+        print(f"hookscope: export incomplete: {error}", file=sys.stderr)
+        return 2
+    except BrokenPipeError:
+        return 1
