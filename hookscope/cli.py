@@ -134,6 +134,11 @@ def build_parser() -> argparse.ArgumentParser:
         "config",
         help="show effective configuration with secrets masked",
     )
+    purge_parser = commands.add_parser("purge", help="delete events through the server API")
+    purge_parser.add_argument("--url", default="http://127.0.0.1:8000")
+    purge_parser.add_argument("--older-than", help="delete events before this ISO timestamp")
+    purge_parser.add_argument("--keep-last", type=int, help="number of newest events to retain")
+    purge_parser.add_argument("--json", action="store_true", help="print the API response as JSON")
     return parser
 
 
@@ -488,5 +493,45 @@ def main(argv: Sequence[str] | None = None) -> int:
         "replay": replay,
         "verify": verify_saved,
         "config": show_config,
+        "purge": purge,
     }
     return handlers.get(args.command, serve)(args)
+
+
+def purge(args: argparse.Namespace, send_request: Callable = post) -> int:
+    """Apply explicit limits, or the server's configured retention policy."""
+    if args.keep_last is not None and args.keep_last < 0:
+        print("hookscope: --keep-last must be nonnegative", file=sys.stderr)
+        return 2
+    payload = {}
+    if args.older_than is not None:
+        payload["older_than"] = args.older_than
+    if args.keep_last is not None:
+        payload["keep_last"] = args.keep_last
+    base = args.url.rstrip("/")
+    status, text = send_request(
+        f"{base}/api/purge",
+        json.dumps(payload).encode(),
+        {"Content-Type": "application/json", **auth_headers()},
+    )
+    if status != 200:
+        message = (
+            "set HOOKSCOPE_ADMIN_PASSWORD" if status in (401, 403)
+            else f"could not reach {base}: {text}" if status is None
+            else error_message(text)
+        )
+        print(f"hookscope: {message}", file=sys.stderr)
+        return 2
+    try:
+        answer = json.loads(text)
+        if not isinstance(answer, dict) or any(
+            type(answer.get(key)) is not int or answer[key] < 0
+            for key in ("removed", "remaining")
+        ):
+            raise ValueError("invalid purge response")
+    except ValueError:
+        print("hookscope: invalid purge response", file=sys.stderr)
+        return 2
+    print(json.dumps(answer) if args.json else
+          f"removed {answer['removed']} events; {answer['remaining']} remaining")
+    return 0
