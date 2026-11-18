@@ -143,6 +143,9 @@ def build_parser() -> argparse.ArgumentParser:
     export_parser.add_argument("--url", default="http://127.0.0.1:8000")
     export_parser.add_argument("--source", choices=sorted(PROVIDERS))
     export_parser.add_argument("--verification", choices=("valid", "invalid", "unsigned", "no_secret"))
+    import_parser = commands.add_parser("import", help="import NDJSON events into a local database")
+    import_parser.add_argument("file", help="NDJSON file, or - for stdin")
+    import_parser.add_argument("--db", required=True, help="destination SQLite database")
     return parser
 
 
@@ -499,6 +502,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "config": show_config,
         "purge": purge,
         "export": export_events,
+        "import": import_events,
     }
     return handlers.get(args.command, serve)(args)
 
@@ -568,3 +572,19 @@ def export_events(args: argparse.Namespace, fetch: Callable = get_json) -> int:
         return 2
     except BrokenPipeError:
         return 1
+
+
+def import_events(args: argparse.Namespace) -> int:
+    """Import local records atomically without replaying or forwarding them."""
+    from pathlib import Path
+
+    from .ndjson import import_ndjson
+
+    try:
+        source = sys.stdin.read() if args.file == "-" else Path(args.file).read_text(encoding="utf-8")
+        count = import_ndjson(args.db, source)
+    except (OSError, ValueError) as error:
+        print(f"hookscope: import failed: {error}", file=sys.stderr)
+        return 2
+    print(f"imported {count} events")
+    return 0
