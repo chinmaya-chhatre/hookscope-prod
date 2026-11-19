@@ -52,6 +52,7 @@ from pathlib import Path
 
 import httpx
 
+from .predicates import matches_where, validate_where
 from .providers import PROVIDERS
 from .replay import (
     REPLAY_HEADER,
@@ -133,6 +134,8 @@ class ForwardRule:
     transform: dict | None = None
     retry: RetryPolicy = field(default_factory=RetryPolicy)
 
+    where: tuple[dict, ...] = ()
+
     def matches(self, event: dict) -> bool:
         if event["verification"] not in FORWARDABLE_STATUSES:
             return False
@@ -140,7 +143,7 @@ class ForwardRule:
             return False
         if self.event_types and event_type(event) not in self.event_types:
             return False
-        return True
+        return matches_where(event["body"], self.where)
 
     def to_dict(self) -> dict:
         return {
@@ -151,6 +154,7 @@ class ForwardRule:
             "format": self.format,
             "transform": self.transform,
             "retry": self.retry.to_dict(),
+            **({"where": list(self.where)} if self.where else {}),
         }
 
 
@@ -230,7 +234,11 @@ def parse_rules(data: object) -> list[ForwardRule]:
                 raise InvalidRuleError(f"rule '{name}': {exc}") from exc
 
         retry = parse_retry(raw.get("retry"), name)
-        rules.append(ForwardRule(name, target_url, source, tuple(event_types), fmt, transform, retry))
+        try:
+            where = validate_where(raw.get("where", []))
+        except ValueError as exc:
+            raise InvalidRuleError(f"rule '{name}': {exc}") from exc
+        rules.append(ForwardRule(name, target_url, source, tuple(event_types), fmt, transform, retry, where))
     return rules
 
 
