@@ -21,6 +21,15 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: pip install -r requirements-dev.txt
       - run: ruff check .
+      - name: Build and smoke-test installed wheel
+        run: |
+          pip install build
+          python -m build --wheel
+          python -m venv /tmp/hookscope-wheel
+          /tmp/hookscope-wheel/bin/pip install dist/*.whl
+          cd /tmp
+          /tmp/hookscope-wheel/bin/hookscope --version
+          /tmp/hookscope-wheel/bin/python -c "from importlib.resources import files; assert files('hookscope').joinpath('templates/index.html').is_file()"
       - run: pytest -q
         env:
           PYTEST_ADDOPTS: --junitxml=test-results.xml
