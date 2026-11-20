@@ -189,6 +189,10 @@ def create_app(
         """Add what the event templates show: pretty body and the forward attempts."""
         forwards = store.forwards_by_event([event["id"] for event in events])
         for event in events:
+            event["rule_preview"] = [
+                {"name": rule.name, "matches": rule.matches(event), "where": list(rule.where)}
+                for rule in rules
+            ]
             event["pretty_body"] = _pretty(event["body"])
             event["forwards"] = forwards[event["id"]]
             event["forwards_failed"] = sum(1 for f in event["forwards"] if not _forward_ok(f))

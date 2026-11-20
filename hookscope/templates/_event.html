@@ -21,6 +21,14 @@
       <p class="muted">Cause: <code>{{ e.diagnosis.cause }}</code></p>
     </section>
     {% endif %}
+    <section class="rule-preview" aria-label="Rule preview for event {{ e.id }}">
+      <h2>Rule match preview</h2>
+      <p class="muted">Current rules evaluated against this capture. No requests are sent.</p>
+      {% for rule in e.rule_preview %}
+      <p><strong>{{ rule.name }}</strong>: {{ 'Matches' if rule.matches else 'Does not match' }}</p>
+      {% if rule.where %}<pre>{{ rule.where | tojson(indent=2) }}</pre>{% endif %}
+      {% else %}<p class="muted">No forwarding rules configured.</p>{% endfor %}
+    </section>
     <pre>{{ e.pretty_body }}</pre>
     <pre>{% for k, v in e.headers.items() %}{{ k }}: {{ v }}
 {% endfor %}</pre>
