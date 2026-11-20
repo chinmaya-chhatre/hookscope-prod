@@ -272,17 +272,20 @@ def parse_retry(raw: object, name: str) -> RetryPolicy:
     return RetryPolicy(attempts, values["backoff_seconds"], values["max_backoff_seconds"])
 
 
-def load_rules(path: str | None) -> list[ForwardRule]:
+def load_rules(path: str | None, stored: Iterable[dict] = ()) -> list[ForwardRule]:
     """Load rules from a JSON file; no path means no rules."""
     if not path:
-        return []
+        return parse_rules(list(stored))
     try:
         data = json.loads(Path(path).read_text())
     except OSError as exc:
         raise InvalidRuleError(f"cannot read rules file {path}: {exc}") from exc
     except ValueError as exc:
         raise InvalidRuleError(f"rules file {path} is not valid JSON: {exc}") from exc
-    return parse_rules(data)
+    file_rules = parse_rules(data)
+    file_names = {rule.name for rule in file_rules}
+    stored_rules = parse_rules(list(stored))
+    return file_rules + [rule for rule in stored_rules if rule.name not in file_names]
 
 
 def matching_rules(event: dict, rules: Iterable[ForwardRule]) -> list[ForwardRule]:

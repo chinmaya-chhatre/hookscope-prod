@@ -78,7 +78,7 @@ def test_recovers_when_the_lock_is_released(store):
 def test_not_ready_when_the_database_cannot_be_opened(tmp_path):
     store = EventStore(str(tmp_path / "gone.db"))
     store.path = str(tmp_path / "missing-directory" / "gone.db")
-    response = TestClient(create_app(store=store, secrets={})).get("/readyz")
+    response = TestClient(create_app(store=store, secrets={}, rules=[])).get("/readyz")
     assert response.status_code == 503
     assert "unable to open database file" in response.json()["checks"]["database"]["error"]
 

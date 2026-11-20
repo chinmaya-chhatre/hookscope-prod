@@ -27,6 +27,11 @@ CREATE TABLE IF NOT EXISTS events (
     diagnosis     TEXT
 );
 
+CREATE TABLE IF NOT EXISTS rules (
+    name TEXT PRIMARY KEY,
+    definition TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS forwards (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     event_id      INTEGER NOT NULL REFERENCES events(id),
@@ -93,6 +98,28 @@ class EventStore:
             conn.commit()
         finally:
             conn.close()
+
+    def save_rule(self, definition: dict) -> None:
+        """Validate and persist a named rule; file-rule precedence is applied by the loader."""
+        from .rules import InvalidRuleError, parse_rules
+
+        if not isinstance(definition, dict) or not isinstance(definition.get("name"), str):
+            raise InvalidRuleError("stored rules require an explicit name")
+        if not definition["name"].strip():
+            raise InvalidRuleError("stored rules require a nonempty name")
+        rule = parse_rules([definition])[0]
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO rules (name, definition) VALUES (?, ?) "
+                "ON CONFLICT(name) DO UPDATE SET definition = excluded.definition",
+                (rule.name, json.dumps(rule.to_dict())),
+            )
+
+    def stored_rules(self) -> list[dict]:
+        """Stored definitions in deterministic name order; invalid data fails on load."""
+        with self._connect() as conn:
+            rows = conn.execute("SELECT definition FROM rules ORDER BY name").fetchall()
+        return [json.loads(row["definition"]) for row in rows]
 
     def add(
         self,

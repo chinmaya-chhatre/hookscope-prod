@@ -151,7 +151,7 @@ def create_app(
             )
     secrets = settings.secrets if secrets is None else secrets
     http_client = http_client or httpx.Client(timeout=REPLAY_TIMEOUT_SECONDS)
-    rules = load_rules(settings.rules_path) if rules is None else rules
+    rules = load_rules(settings.rules_path, store.stored_rules()) if rules is None else rules
     purger = Purger(store, settings.retention if retention is None else retention, clock)
 
     def run_forwards(event_id: int, rule_list: list[ForwardRule]) -> None:
