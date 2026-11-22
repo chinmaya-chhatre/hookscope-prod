@@ -99,7 +99,7 @@ class EventStore:
         finally:
             conn.close()
 
-    def save_rule(self, definition: dict) -> None:
+    def save_rule(self, definition: dict, *, overwrite: bool = True) -> bool:
         """Validate and persist a named rule; file-rule precedence is applied by the loader."""
         from .rules import InvalidRuleError, parse_rules
 
@@ -109,11 +109,13 @@ class EventStore:
             raise InvalidRuleError("stored rules require a nonempty name")
         rule = parse_rules([definition])[0]
         with self._connect() as conn:
-            conn.execute(
+            cursor = conn.execute(
                 "INSERT INTO rules (name, definition) VALUES (?, ?) "
-                "ON CONFLICT(name) DO UPDATE SET definition = excluded.definition",
+                + ("ON CONFLICT(name) DO UPDATE SET definition = excluded.definition"
+                   if overwrite else "ON CONFLICT(name) DO NOTHING"),
                 (rule.name, json.dumps(rule.to_dict())),
             )
+            return cursor.rowcount == 1
 
     def stored_rules(self) -> list[dict]:
         """Stored definitions in deterministic name order; invalid data fails on load."""

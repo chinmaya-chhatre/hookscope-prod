@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Annotated
 
 import httpx
-from fastapi import BackgroundTasks, FastAPI, Query, Request
+from fastapi import BackgroundTasks, Body, FastAPI, Query, Request
 from fastapi import Path as PathParam
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.templating import Jinja2Templates
@@ -24,7 +24,17 @@ from .errors import ApiError
 from .providers import PROVIDERS, delivery_id, verify
 from .replay import InvalidTargetError, ReplayResult, replay_event
 from .retention import Purger, RetentionPolicy
-from .rules import ForwardRule, deliver, event_type, forward_event, is_dead_letter, load_rules, matching_rules
+from .rules import (
+    ForwardRule,
+    InvalidRuleError,
+    deliver,
+    event_type,
+    forward_event,
+    is_dead_letter,
+    load_rules,
+    matching_rules,
+    parse_rules,
+)
 from .samples import SampleError, build_sample
 from .schemas import (
     CurlOut,
@@ -151,6 +161,7 @@ def create_app(
             )
     secrets = settings.secrets if secrets is None else secrets
     http_client = http_client or httpx.Client(timeout=REPLAY_TIMEOUT_SECONDS)
+    explicit_rules = rules is not None
     rules = load_rules(settings.rules_path, store.stored_rules()) if rules is None else rules
     purger = Purger(store, settings.retention if retention is None else retention, clock)
 
@@ -586,9 +597,35 @@ def create_app(
         tags=["forwarding"],
         summary="List forwarding rules",
         response_model=list[RuleOut],
+        response_model_exclude_unset=True,
     )
     def list_rules() -> list[dict]:
         return [rule.to_dict() for rule in rules]
+
+    @app.post(
+        "/api/rules",
+        tags=["forwarding"],
+        summary="Create a stored forwarding rule",
+        status_code=201,
+        response_model=RuleOut,
+        response_model_exclude_unset=True,
+        responses=error_responses(409, 422),
+    )
+    def create_rule(payload: Annotated[dict, Body()]) -> dict:
+        if explicit_rules:
+            raise ApiError(409, "rules_override", "rules are explicitly managed by the application")
+        if not isinstance(payload.get("name"), str) or not payload["name"].strip():
+            raise ApiError(422, "invalid_rule", "an explicit nonempty rule name is required")
+        try:
+            rule = parse_rules([payload])[0]
+        except (InvalidRuleError, TypeError) as exc:
+            raise ApiError(422, "invalid_rule", str(exc)) from exc
+        if any(existing.name == rule.name for existing in rules):
+            raise ApiError(409, "rule_exists", "a rule with this name already exists")
+        if not store.save_rule(payload, overwrite=False):
+            raise ApiError(409, "rule_exists", "a stored rule with this name already exists")
+        rules.append(rule)
+        return rule.to_dict()
 
     @app.post(
         "/api/purge",

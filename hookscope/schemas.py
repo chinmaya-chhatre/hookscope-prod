@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_serializer
 
 Verification = Literal["valid", "invalid", "unsigned", "no_secret"]
 VERIFICATION_DESCRIPTION = (
@@ -178,6 +178,7 @@ class RetryPolicyOut(BaseModel):
 
 
 class RuleOut(BaseModel):
+    where: list[dict[str, Any]] = Field(default_factory=list)
     name: str
     target_url: str
     source: str | None = Field(description="Only events from this source match; null for any.")
@@ -185,6 +186,14 @@ class RuleOut(BaseModel):
     format: str = Field(examples=["raw"])
     transform: dict[str, Any] | None
     retry: RetryPolicyOut
+
+    @model_serializer(mode="wrap")
+    def serialize_rule(self, handler):
+        """Keep empty predicates absent in both model dumps and HTTP responses."""
+        data = handler(self)
+        if not self.where:
+            data.pop("where", None)
+        return data
 
 
 class CurlOut(BaseModel):
