@@ -178,6 +178,7 @@ class RetryPolicyOut(BaseModel):
 
 
 class RuleOut(BaseModel):
+    enabled: bool = Field(default=True, strict=True, description="False pauses rule forwarding.")
     where: list[dict[str, Any]] = Field(default_factory=list)
     name: str
     target_url: str
@@ -189,10 +190,12 @@ class RuleOut(BaseModel):
 
     @model_serializer(mode="wrap")
     def serialize_rule(self, handler):
-        """Keep empty predicates absent in both model dumps and HTTP responses."""
+        """Omit default values introduced after the original response contract."""
         data = handler(self)
         if not self.where:
             data.pop("where", None)
+        if self.enabled:
+            data.pop("enabled", None)
         return data
 
 

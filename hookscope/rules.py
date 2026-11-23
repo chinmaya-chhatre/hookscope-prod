@@ -135,9 +135,10 @@ class ForwardRule:
     retry: RetryPolicy = field(default_factory=RetryPolicy)
 
     where: tuple[dict, ...] = ()
+    enabled: bool = True
 
     def matches(self, event: dict) -> bool:
-        if event["verification"] not in FORWARDABLE_STATUSES:
+        if not self.enabled or event["verification"] not in FORWARDABLE_STATUSES:
             return False
         if self.source and event["source"] != self.source:
             return False
@@ -155,6 +156,7 @@ class ForwardRule:
             "transform": self.transform,
             "retry": self.retry.to_dict(),
             **({"where": list(self.where)} if self.where else {}),
+            **({"enabled": False} if not self.enabled else {}),
         }
 
 
@@ -233,12 +235,17 @@ def parse_rules(data: object) -> list[ForwardRule]:
             except InvalidTransformError as exc:
                 raise InvalidRuleError(f"rule '{name}': {exc}") from exc
 
+        enabled = raw.get("enabled", True)
+        if not isinstance(enabled, bool):
+            raise InvalidRuleError(f"rule '{name}': enabled must be a boolean")
         retry = parse_retry(raw.get("retry"), name)
         try:
             where = validate_where(raw.get("where", []))
         except ValueError as exc:
             raise InvalidRuleError(f"rule '{name}': {exc}") from exc
-        rules.append(ForwardRule(name, target_url, source, tuple(event_types), fmt, transform, retry, where))
+        rules.append(
+            ForwardRule(name, target_url, source, tuple(event_types), fmt, transform, retry, where, enabled)
+        )
     return rules
 
 
@@ -349,7 +356,10 @@ def deliver(
     without holding up the other rules. ``record`` is called after each attempt.
     """
     now = clock()
-    queue = [(now, index, rule, forward_attempts(event, rule, client)) for index, rule in enumerate(rules)]
+    queue = [
+        (now, index, rule, forward_attempts(event, rule, client))
+        for index, rule in enumerate(rules) if rule.enabled
+    ]
     heapq.heapify(queue)
     while queue:
         due, index, rule, attempts = heapq.heappop(queue)

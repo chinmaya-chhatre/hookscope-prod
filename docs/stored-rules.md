@@ -49,3 +49,28 @@ its active rule list. Failed writes leave that list unchanged. Other processes
 retain their startup configuration until restarted. There is no cross-process
 update broadcast or optimistic version check: concurrent successful replacements
 use the last committed definition in storage.
+
+## Pause and resume
+
+Set `"enabled": false` on a rule to pause it without removing its definition.
+The field must be a JSON boolean; strings, numbers and null are rejected.
+An omitted flag defaults to true, preserving existing file and stored rules.
+GET responses and serialized definitions include `enabled` when false; true is
+omitted for compatibility.
+
+For stored rules, PUT the complete definition to `/api/rules/{name}` with
+`enabled` set to false or true. PUT still replaces the whole rule: omitting
+the flag resets it to true. Pausing takes effect for subsequent matching in
+the serving process and survives restart. File rules use the same flag but
+must be changed in their file and reloaded by restarting.
+
+Paused rules do not match new events or enter new delivery batches. Rule-based
+transform previews report `matches: false` while still displaying the transform
+output. Manual rule resends return 409 with code `rule_disabled`; dead letters
+show `resendable: false` until the rule is enabled again. Captured events,
+forward history and stored definitions remain intact.
+
+Already selected forwards and their retries can finish using their original
+rule snapshot. Pausing is not cancellation. Explicit ad-hoc replay to a target
+URL is independent of rule state. Other server processes still need restart
+to load stored-rule changes.

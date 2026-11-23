@@ -224,7 +224,7 @@ def create_app(
             rule = by_name.get(forward["rule"])
             if is_dead_letter(forward, rule):
                 # A rule removed from the rules file can no longer be re-sent.
-                dead.append({**forward, "resendable": rule is not None})
+                dead.append({**forward, "resendable": rule is not None and rule.enabled})
         return dead[:limit]
 
     body_limit = settings.max_body_bytes if max_body_bytes is None else max_body_bytes
@@ -576,7 +576,7 @@ def create_app(
         responses={
             200: {"model": ResendOut},
             502: {"model": ResendOut, "description": "The target could not be reached."},
-            **error_responses(404),
+            **error_responses(404, 409),
         },
     )
     def resend_forward(event_id: EventId, rule_name: str) -> JSONResponse:
@@ -586,6 +586,8 @@ def create_app(
         rule = next((r for r in rules if r.name == rule_name), None)
         if rule is None:
             raise ApiError(404, "rule_not_found", f"unknown rule '{rule_name}'")
+        if not rule.enabled:
+            raise ApiError(409, "rule_disabled", "enable the rule before re-sending a forward")
         history = [f for f in store.list_forwards(event_id) if f["rule"] == rule_name]
         if not history:
             raise ApiError(
