@@ -196,6 +196,11 @@ class RuleOut(BaseModel):
         return data
 
 
+class RuleDeleteOut(BaseModel):
+    name: str = Field(description="The stored rule that was removed.")
+    deleted: Literal[True] = Field(description="Deletion committed successfully.")
+
+
 class CurlOut(BaseModel):
     command: str = Field(description="A shell command that sends this event to this HookScope again.")
     omitted_headers: list[str] = Field(description="Credential headers that were never stored.")

@@ -8,6 +8,7 @@ import re
 import time
 from collections.abc import Callable
 from pathlib import Path
+from threading import RLock
 from typing import Annotated
 
 import httpx
@@ -50,6 +51,7 @@ from .schemas import (
     ReplayOut,
     ReplayRequest,
     ResendOut,
+    RuleDeleteOut,
     RuleOut,
     SlackChallengeOut,
     TransformPreviewOut,
@@ -162,7 +164,14 @@ def create_app(
     secrets = settings.secrets if secrets is None else secrets
     http_client = http_client or httpx.Client(timeout=REPLAY_TIMEOUT_SECONDS)
     explicit_rules = rules is not None
-    rules = load_rules(settings.rules_path, store.stored_rules()) if rules is None else rules
+    file_rule_names: set[str] = set()
+    if rules is None:
+        file_rules = load_rules(settings.rules_path)
+        file_rule_names = {rule.name for rule in file_rules}
+        rules = file_rules + [
+            rule for rule in load_rules(None, store.stored_rules()) if rule.name not in file_rule_names
+        ]
+    rule_lock = RLock()
     purger = Purger(store, settings.retention if retention is None else retention, clock)
 
     def run_forwards(event_id: int, rule_list: list[ForwardRule]) -> None:
@@ -612,20 +621,72 @@ def create_app(
         responses=error_responses(409, 422),
     )
     def create_rule(payload: Annotated[dict, Body()]) -> dict:
+        nonlocal rules
+        with rule_lock:
+            if explicit_rules:
+                raise ApiError(409, "rules_override", "rules are explicitly managed by the application")
+            if not isinstance(payload.get("name"), str) or not payload["name"].strip():
+                raise ApiError(422, "invalid_rule", "an explicit nonempty rule name is required")
+            try:
+                rule = parse_rules([payload])[0]
+            except (InvalidRuleError, TypeError) as exc:
+                raise ApiError(422, "invalid_rule", str(exc)) from exc
+            if any(existing.name == rule.name for existing in rules):
+                raise ApiError(409, "rule_exists", "a rule with this name already exists")
+            if not store.save_rule(payload, overwrite=False):
+                raise ApiError(409, "rule_exists", "a stored rule with this name already exists")
+            # Replace the list so existing readers keep a consistent snapshot.
+            rules = [*rules, rule]
+            return rule.to_dict()
+
+    def require_mutable_rule(name: str) -> None:
         if explicit_rules:
             raise ApiError(409, "rules_override", "rules are explicitly managed by the application")
-        if not isinstance(payload.get("name"), str) or not payload["name"].strip():
-            raise ApiError(422, "invalid_rule", "an explicit nonempty rule name is required")
-        try:
-            rule = parse_rules([payload])[0]
-        except (InvalidRuleError, TypeError) as exc:
-            raise ApiError(422, "invalid_rule", str(exc)) from exc
-        if any(existing.name == rule.name for existing in rules):
-            raise ApiError(409, "rule_exists", "a rule with this name already exists")
-        if not store.save_rule(payload, overwrite=False):
-            raise ApiError(409, "rule_exists", "a stored rule with this name already exists")
-        rules.append(rule)
-        return rule.to_dict()
+        if name in file_rule_names:
+            raise ApiError(409, "rule_read_only", "file rules cannot be changed through the API")
+
+    @app.put(
+        "/api/rules/{name}",
+        tags=["forwarding"],
+        summary="Replace a stored forwarding rule",
+        response_model=RuleOut,
+        response_model_exclude_unset=True,
+        responses=error_responses(404, 409, 422),
+    )
+    def replace_rule(name: str, payload: Annotated[dict, Body()]) -> dict:
+        nonlocal rules
+        with rule_lock:
+            require_mutable_rule(name)
+            if "name" in payload and payload["name"] != name:
+                raise ApiError(422, "invalid_rule", "body name must match the rule path")
+            definition = {**payload, "name": name}
+            try:
+                rule = parse_rules([definition])[0]
+            except (InvalidRuleError, TypeError) as exc:
+                raise ApiError(422, "invalid_rule", str(exc)) from exc
+            if not store.replace_rule(definition):
+                raise ApiError(404, "rule_not_found", "stored rule not found")
+            # Persist first. In-flight forwards retain the old selected rule objects.
+            rules = [rule if existing.name == name else existing for existing in rules]
+            if not any(existing.name == name for existing in rules):
+                rules = [*rules, rule]
+            return rule.to_dict()
+
+    @app.delete(
+        "/api/rules/{name}",
+        tags=["forwarding"],
+        summary="Delete a stored forwarding rule",
+        response_model=RuleDeleteOut,
+        responses=error_responses(404, 409),
+    )
+    def delete_rule(name: str) -> dict:
+        nonlocal rules
+        with rule_lock:
+            require_mutable_rule(name)
+            if not store.delete_rule(name):
+                raise ApiError(404, "rule_not_found", "stored rule not found")
+            rules = [rule for rule in rules if rule.name != name]
+            return {"name": name, "deleted": True}
 
     @app.post(
         "/api/purge",

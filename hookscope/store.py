@@ -101,13 +101,7 @@ class EventStore:
 
     def save_rule(self, definition: dict, *, overwrite: bool = True) -> bool:
         """Validate and persist a named rule; file-rule precedence is applied by the loader."""
-        from .rules import InvalidRuleError, parse_rules
-
-        if not isinstance(definition, dict) or not isinstance(definition.get("name"), str):
-            raise InvalidRuleError("stored rules require an explicit name")
-        if not definition["name"].strip():
-            raise InvalidRuleError("stored rules require a nonempty name")
-        rule = parse_rules([definition])[0]
+        rule = _validated_rule(definition)
         with self._connect() as conn:
             cursor = conn.execute(
                 "INSERT INTO rules (name, definition) VALUES (?, ?) "
@@ -115,6 +109,22 @@ class EventStore:
                    if overwrite else "ON CONFLICT(name) DO NOTHING"),
                 (rule.name, json.dumps(rule.to_dict())),
             )
+            return cursor.rowcount == 1
+
+    def replace_rule(self, definition: dict) -> bool:
+        """Replace an existing named definition atomically; never insert a missing rule."""
+        rule = _validated_rule(definition)
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "UPDATE rules SET definition = ? WHERE name = ?",
+                (json.dumps(rule.to_dict()), rule.name),
+            )
+            return cursor.rowcount == 1
+
+    def delete_rule(self, name: str) -> bool:
+        """Delete only a stored definition; captured events and forwards remain intact."""
+        with self._connect() as conn:
+            cursor = conn.execute("DELETE FROM rules WHERE name = ?", (name,))
             return cursor.rowcount == 1
 
     def stored_rules(self) -> list[dict]:
@@ -426,3 +436,13 @@ def _load_diagnosis(raw: str | None) -> dict[str, str] | None:
     except ValueError:
         return None
     return value if isinstance(value, dict) else None
+
+
+def _validated_rule(definition: dict):
+    from .rules import InvalidRuleError, parse_rules
+
+    if not isinstance(definition, dict) or not isinstance(definition.get("name"), str):
+        raise InvalidRuleError("stored rules require an explicit name")
+    if not definition["name"].strip():
+        raise InvalidRuleError("stored rules require a nonempty name")
+    return parse_rules([definition])[0]
