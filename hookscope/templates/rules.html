@@ -1,0 +1,34 @@
+{% extends "layout.html" %}
+{% block title %}Forwarding rules · HookScope{% endblock %}
+{% block content %}
+  <h1>Forwarding rules</h1>
+  <p class="muted">{{ rule_entries | length }} effective rules in this process. Reload to see changes.</p>
+  <p class="muted">This page only displays configuration. Viewing it sends no webhooks and changes no rules.</p>
+  {% if not rule_entries %}
+    <p class="muted">No forwarding rules configured. Load a rules file or create a stored rule through the API.</p>
+  {% endif %}
+  <section class="rules-list" aria-label="Effective forwarding rules">
+  {% for entry in rule_entries %}
+  {% set rule = entry.definition %}
+  <details class="rule-card" data-rule-name="{{ rule.name }}" data-management="{{ entry.management }}">
+    <summary>
+      <strong>{{ rule.name }}</strong>
+      <span class="badge {{ 'rule-enabled' if entry.enabled else 'rule-paused' }}">{{ 'Enabled' if entry.enabled else 'Paused' }}</span>
+      <span class="muted">{% if entry.management == 'file' %}File (read-only){% elif entry.management == 'application' %}Application (read-only){% else %}Stored{% endif %}</span>
+      <span class="rule-target">Target: {{ rule.target_url }}</span>
+    </summary>
+    <div class="rule-meta">
+      <p>Source: <strong>{{ rule.source or 'any' }}</strong>.
+        Event types: <strong>{{ rule.event_types | join(', ') if rule.event_types else 'any' }}</strong>.
+        Payload format: <strong>{{ rule.format }}</strong>.</p>
+      <p>Retry policy: up to {{ rule.retry.attempts }} attempts;
+        initial delay {{ rule.retry.backoff_seconds }} seconds,
+        maximum delay {{ rule.retry.max_backoff_seconds }} seconds.</p>
+      <p>{% if entry.enabled %}Enabled rules forward only when their filters match.{% else %}Paused rules do not match new events. Already selected forwards and retries can finish.{% endif %}</p>
+      <p class="muted">Normalized definition, including predicates and transform when configured:</p>
+    </div>
+    <pre class="rule-definition">{{ rule | tojson(indent=2) }}</pre>
+  </details>
+  {% endfor %}
+  </section>
+{% endblock %}

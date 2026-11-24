@@ -1,5 +1,31 @@
 # Stored rules
 
+## Dashboard list
+
+Open `/rules` or choose **Rules** in the dashboard navigation to inspect the
+effective rules in the serving process. Expand a rule to see its source and
+event-type filters, payload format, retry policy and normalized JSON definition,
+including predicates and transforms. Enabled and paused rules are both listed.
+Pausing stops new matches; already selected deliveries and retries can finish.
+
+Each rule is labelled **Stored**, **File (read-only)** or **Application
+(read-only)**. File rules win name collisions with stored definitions, so only
+the effective file definition is shown. An explicit application override shows
+only its supplied rules. The list follows the same order and definitions as
+`GET /api/rules`.
+
+This is a read-only view: opening or expanding a rule does not change it, send
+a webhook or create history. Use the existing administrative API to create,
+replace, pause or delete stored rules. Reload the page after a change. Other
+server processes retain their startup configuration until restarted, as before.
+
+The page uses the same configured authentication as the dashboard and API.
+Definitions may include sensitive target URLs or transform constants; protect
+administrative access before exposing the instance. The empty state explains
+how to supply rules when none are effective.
+
+## Storage and loading
+
 SQLite now includes a rules table, created automatically for existing databases. `EventStore.save_rule(definition)` validates named definitions with the shared rule parser before an atomic upsert. `stored_rules()` reads them in name order.
 
 At application startup, configured file rules are loaded first, followed by stored rules. A file rule wins a name collision; the stored definition remains intact. File contents are never rewritten. Invalid stored definitions fail startup rather than silently changing forwarding. An explicit `create_app(rules=...)` continues to override both sources.

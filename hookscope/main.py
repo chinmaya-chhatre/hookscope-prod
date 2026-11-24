@@ -811,6 +811,31 @@ def create_app(
         }
 
     @app.get(
+        "/rules",
+        tags=["dashboard"],
+        summary="Forwarding rules dashboard",
+        response_class=HTMLResponse,
+    )
+    def rules_page(request: Request) -> HTMLResponse:
+        # A single reference keeps the rendered page consistent during API updates.
+        snapshot = rules
+        entries = [
+            {
+                "definition": rule.to_dict(),
+                "enabled": rule.enabled,
+                "management": (
+                    "application" if explicit_rules else "file" if rule.name in file_rule_names else "stored"
+                ),
+            }
+            for rule in snapshot
+        ]
+        return TEMPLATES.TemplateResponse(
+            request,
+            "rules.html",
+            {"rule_entries": entries, "transform_rules": {}},
+        )
+
+    @app.get(
         "/",
         tags=["dashboard"],
         summary="Dashboard",

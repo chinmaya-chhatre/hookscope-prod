@@ -88,10 +88,18 @@
     .preview-note { flex-basis:100%; margin:0; font-size:13px; }
     .preview-note.ok { color:var(--ok); } .preview-note.err { color:var(--bad); } .preview-note.warn { color:var(--warn); }
     .preview-output { flex-basis:100%; border:1px solid var(--border); border-radius:6px; }
+    .primary-nav { margin-bottom:16px; }
+    .rule-target { flex-basis:100%; word-break:break-all; font-size:13px; }
+    .rule-meta { padding:0 14px; font-size:13px; }
+    .rule-enabled { color:var(--ok); } .rule-paused { color:var(--warn); }
   </style>
 </head>
 <body>
 <main>
+<nav class="primary-nav" aria-label="Dashboard views">
+  <a href="/" class="{{ 'active' if request.url.path != '/rules' }}"{% if request.url.path != '/rules' %} aria-current="page"{% endif %}>Events</a>
+  <a href="/rules" class="{{ 'active' if request.url.path == '/rules' }}"{% if request.url.path == '/rules' %} aria-current="page"{% endif %}>Rules</a>
+</nav>
 {% block content %}{% endblock %}
 </main>
 <script type="application/json" id="transform-rules">{{ transform_rules | tojson }}</script>
