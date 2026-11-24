@@ -51,6 +51,7 @@ from .schemas import (
     ReplayOut,
     ReplayRequest,
     ResendOut,
+    RuleChangeOut,
     RuleDeleteOut,
     RuleOut,
     SlackChallengeOut,
@@ -622,7 +623,7 @@ def create_app(
         response_model_exclude_unset=True,
         responses=error_responses(409, 422),
     )
-    def create_rule(payload: Annotated[dict, Body()]) -> dict:
+    def create_rule(request: Request, payload: Annotated[dict, Body()]) -> dict:
         nonlocal rules
         with rule_lock:
             if explicit_rules:
@@ -635,11 +636,44 @@ def create_app(
                 raise ApiError(422, "invalid_rule", str(exc)) from exc
             if any(existing.name == rule.name for existing in rules):
                 raise ApiError(409, "rule_exists", "a rule with this name already exists")
-            if not store.save_rule(payload, overwrite=False):
+            if not store.save_rule(payload, overwrite=False, actor=rule_actor(request)):
                 raise ApiError(409, "rule_exists", "a stored rule with this name already exists")
             # Replace the list so existing readers keep a consistent snapshot.
             rules = [*rules, rule]
             return rule.to_dict()
+
+    def rule_actor(request: Request) -> str:
+        # Basic usernames are not identities: any username authenticates today.
+        if not password:
+            return "anonymous"
+        scheme = request.headers.get("authorization", "").partition(" ")[0].lower()
+        return "admin_basic" if scheme == "basic" else "admin_bearer"
+
+    @app.get(
+        "/api/rule-history",
+        tags=["forwarding"],
+        summary="List committed rule changes",
+        response_model=list[RuleChangeOut],
+        responses={
+            200: {"headers": {"X-Next-Cursor": {
+                "description": "Use as before_id to read the next page of older changes.",
+                "schema": {"type": "integer"},
+            }}},
+            **error_responses(422),
+        },
+    )
+    def rule_history(
+        response: Response,
+        limit: PageSize = 50,
+        name: str | None = None,
+        before_id: BeforeId = None,
+    ) -> list[dict]:
+        limit = min(limit, 500)
+        history = store.rule_history(name=name, limit=limit + 1, before_id=before_id)
+        if len(history) > limit:
+            history = history[:limit]
+            response.headers["X-Next-Cursor"] = str(history[-1]["id"])
+        return history
 
     def require_mutable_rule(name: str) -> None:
         if explicit_rules:
@@ -655,7 +689,7 @@ def create_app(
         response_model_exclude_unset=True,
         responses=error_responses(404, 409, 422),
     )
-    def replace_rule(name: str, payload: Annotated[dict, Body()]) -> dict:
+    def replace_rule(name: str, request: Request, payload: Annotated[dict, Body()]) -> dict:
         nonlocal rules
         with rule_lock:
             require_mutable_rule(name)
@@ -666,7 +700,7 @@ def create_app(
                 rule = parse_rules([definition])[0]
             except (InvalidRuleError, TypeError) as exc:
                 raise ApiError(422, "invalid_rule", str(exc)) from exc
-            if not store.replace_rule(definition):
+            if not store.replace_rule(definition, actor=rule_actor(request)):
                 raise ApiError(404, "rule_not_found", "stored rule not found")
             # Persist first. In-flight forwards retain the old selected rule objects.
             rules = [rule if existing.name == name else existing for existing in rules]
@@ -681,11 +715,11 @@ def create_app(
         response_model=RuleDeleteOut,
         responses=error_responses(404, 409),
     )
-    def delete_rule(name: str) -> dict:
+    def delete_rule(name: str, request: Request) -> dict:
         nonlocal rules
         with rule_lock:
             require_mutable_rule(name)
-            if not store.delete_rule(name):
+            if not store.delete_rule(name, actor=rule_actor(request)):
                 raise ApiError(404, "rule_not_found", "stored rule not found")
             rules = [rule for rule in rules if rule.name != name]
             return {"name": name, "deleted": True}

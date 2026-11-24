@@ -199,6 +199,17 @@ class RuleOut(BaseModel):
         return data
 
 
+class RuleChangeOut(BaseModel):
+    id: int = Field(description="Monotonic history cursor, independent of event ids.")
+    name: str
+    changed_at: str = Field(description="UTC ISO 8601 time of the committed change.")
+    actor: Literal["programmatic", "anonymous", "admin_basic", "admin_bearer"] = Field(
+        description="Access context; the shared administrator password does not identify a person."
+    )
+    before: dict[str, Any] | None = Field(description="Previous stored definition; null on creation.")
+    after: dict[str, Any] | None = Field(description="New stored definition; null on deletion.")
+
+
 class RuleDeleteOut(BaseModel):
     name: str = Field(description="The stored rule that was removed.")
     deleted: Literal[True] = Field(description="Deletion committed successfully.")

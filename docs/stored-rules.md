@@ -74,3 +74,61 @@ Already selected forwards and their retries can finish using their original
 rule snapshot. Pausing is not cancellation. Explicit ad-hoc replay to a target
 URL is independent of rule state. Other server processes still need restart
 to load stored-rule changes.
+
+## Rule change history
+
+`GET /api/rule-history` returns committed stored-rule changes, newest first.
+Each record contains `id`, `name`, `changed_at` (UTC ISO 8601), `actor`,
+`before` and `after`. Creation has a null `before`; deletion has a null
+`after`. Replacement, including pause/resume, includes both definitions.
+Snapshots preserve the stored JSON; older sparse definitions may omit optional
+fields. An unchanged definition does not add a history record.
+
+Use `name` for an exact rule-name filter. Deleted names remain queryable, and
+recreating a name continues its history. The endpoint returns a list, with
+`limit` defaulting to 50 and capped at 500. When another page exists,
+`X-Next-Cursor` holds the last history id: pass it as `before_id` with the
+same filter for older records. These ids are independent of event ids.
+A name with no recorded changes returns an empty list.
+
+For example, in a local unprotected development instance:
+
+```sh
+curl 'http://localhost:8000/api/rule-history?name=notify-slack&limit=20'
+```
+
+Use the configured administrative authentication on protected instances.
+History has the same access requirements as rule definitions and can contain
+sensitive target URLs or transform constants. It never records Authorization
+headers, passwords or supplied Basic usernames as actor metadata.
+
+| Actor | Meaning |
+| --- | --- |
+| admin_basic | Request authenticated with the shared administrator password using HTTP Basic |
+| admin_bearer | Request authenticated with the shared administrator password using Bearer |
+| anonymous | Request made while administrative authentication was disabled |
+| programmatic | Direct EventStore write using its default actor context |
+
+The current password is shared and accepts any Basic username. These labels
+identify the access context, not a verified individual. A client-provided
+username or actor header cannot provide trustworthy attribution, so neither is
+used. Direct storage callers may select one of these contexts through the
+keyword-only `actor` argument; it is application-supplied metadata.
+
+The definition and its history record commit in the same SQLite write
+transaction. Concurrent writers take the write lock before reading the
+previous definition, so each before/after pair follows the actual commit
+order. If writing history fails, the rule write rolls back and the serving
+process keeps its previous active rules. Rejected, conflicting and missing-rule
+requests produce no history.
+
+Existing databases gain the history table automatically. Previous changes
+cannot be reconstructed and are not fabricated. File edits, startup loading
+and explicit embedded rules do not produce stored-rule history. File rules
+remain read-only through the API.
+
+History survives process restarts, rule deletion/recreation and event purging.
+Event-retention settings do not expire it. Include it in database backups and
+access controls, and plan disk capacity accordingly. There is no history
+deletion API or dashboard in this interface. It is not a tamper-proof audit log:
+a principal with database write access can alter the database.

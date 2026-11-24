@@ -32,6 +32,16 @@ CREATE TABLE IF NOT EXISTS rules (
     definition TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS rule_changes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    changed_at TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    before_definition TEXT,
+    after_definition TEXT
+);
+CREATE INDEX IF NOT EXISTS rule_changes_name_id ON rule_changes(name, id);
+
 CREATE TABLE IF NOT EXISTS forwards (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     event_id      INTEGER NOT NULL REFERENCES events(id),
@@ -99,33 +109,85 @@ class EventStore:
         finally:
             conn.close()
 
-    def save_rule(self, definition: dict, *, overwrite: bool = True) -> bool:
+    def save_rule(
+        self, definition: dict, *, overwrite: bool = True, actor: str = "programmatic"
+    ) -> bool:
         """Validate and persist a named rule; file-rule precedence is applied by the loader."""
         rule = _validated_rule(definition)
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            before = conn.execute(
+                "SELECT definition FROM rules WHERE name = ?", (rule.name,)
+            ).fetchone()
             cursor = conn.execute(
                 "INSERT INTO rules (name, definition) VALUES (?, ?) "
                 + ("ON CONFLICT(name) DO UPDATE SET definition = excluded.definition"
                    if overwrite else "ON CONFLICT(name) DO NOTHING"),
                 (rule.name, json.dumps(rule.to_dict())),
             )
+            if cursor.rowcount == 1:
+                _record_rule_change(conn, rule.name, actor, before, rule.to_dict())
             return cursor.rowcount == 1
 
-    def replace_rule(self, definition: dict) -> bool:
+    def replace_rule(self, definition: dict, *, actor: str = "programmatic") -> bool:
         """Replace an existing named definition atomically; never insert a missing rule."""
         rule = _validated_rule(definition)
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            before = conn.execute(
+                "SELECT definition FROM rules WHERE name = ?", (rule.name,)
+            ).fetchone()
             cursor = conn.execute(
                 "UPDATE rules SET definition = ? WHERE name = ?",
                 (json.dumps(rule.to_dict()), rule.name),
             )
+            if cursor.rowcount == 1:
+                _record_rule_change(conn, rule.name, actor, before, rule.to_dict())
             return cursor.rowcount == 1
 
-    def delete_rule(self, name: str) -> bool:
+    def delete_rule(self, name: str, *, actor: str = "programmatic") -> bool:
         """Delete only a stored definition; captured events and forwards remain intact."""
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            before = conn.execute(
+                "SELECT definition FROM rules WHERE name = ?", (name,)
+            ).fetchone()
             cursor = conn.execute("DELETE FROM rules WHERE name = ?", (name,))
+            if cursor.rowcount == 1:
+                _record_rule_change(conn, name, actor, before, None)
             return cursor.rowcount == 1
+
+    def rule_history(
+        self, name: str | None = None, limit: int = 50, before_id: int | None = None
+    ) -> list[dict]:
+        """Newest committed changes first, including deleted and recreated names."""
+        if type(limit) is not int or not 1 <= limit <= 501:
+            raise ValueError("history limit must be from 1 to 501")
+        if before_id is not None and (type(before_id) is not int or not 0 <= before_id < 2**63):
+            raise ValueError("invalid history cursor")
+        conditions, params = [], []
+        if name is not None:
+            conditions.append("name = ?")
+            params.append(name)
+        if before_id is not None:
+            conditions.append("id < ?")
+            params.append(before_id)
+        query = "SELECT * FROM rule_changes"
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        with self._connect() as conn:
+            rows = conn.execute(query + " ORDER BY id DESC LIMIT ?", [*params, limit]).fetchall()
+        return [
+            {
+                "id": row["id"],
+                "name": row["name"],
+                "changed_at": row["changed_at"],
+                "actor": row["actor"],
+                "before": json.loads(row["before_definition"]) if row["before_definition"] else None,
+                "after": json.loads(row["after_definition"]) if row["after_definition"] else None,
+            }
+            for row in rows
+        ]
 
     def stored_rules(self) -> list[dict]:
         """Stored definitions in deterministic name order; invalid data fails on load."""
@@ -436,6 +498,21 @@ def _load_diagnosis(raw: str | None) -> dict[str, str] | None:
     except ValueError:
         return None
     return value if isinstance(value, dict) else None
+
+
+def _record_rule_change(conn, name: str, actor: str, before, after: dict | None) -> None:
+    """Store the snapshot in the same write transaction as its definition."""
+    if actor not in {"programmatic", "anonymous", "admin_basic", "admin_bearer"}:
+        raise ValueError("unknown rule-change actor")
+    previous = json.loads(before["definition"]) if before else None
+    if previous == after:
+        return
+    conn.execute(
+        "INSERT INTO rule_changes (name, changed_at, actor, before_definition, after_definition) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (name, _now(), actor, json.dumps(previous) if previous is not None else None,
+         json.dumps(after) if after is not None else None),
+    )
 
 
 def _validated_rule(definition: dict):
