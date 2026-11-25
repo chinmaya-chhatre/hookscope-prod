@@ -1,0 +1,87 @@
+<script>
+(() => {
+  const form = document.getElementById("rule-editor");
+  if (!form) return;
+  const input = document.getElementById("rule-json");
+  const status = document.getElementById("rule-status");
+  const save = document.getElementById("rule-save");
+  let revision = 0;
+  let timer;
+  let busy = false;
+  let validated = null;
+  const edit = form.dataset.mode === "edit" ? form.dataset.editing : null;
+  const validationUrl = "/api/rule-validation" + (edit === null ? "" : "?edit=" + encodeURIComponent(edit));
+  function show(message) { status.textContent = message; }
+  async function validate(version) {
+    const source = input.value;
+    let payload;
+    try {
+      payload = JSON.parse(source);
+      if (!payload || Array.isArray(payload) || typeof payload !== "object") {
+        throw new Error("Enter one JSON rule object.");
+      }
+    } catch (error) {
+      if (version === revision) show("Invalid JSON: " + error.message);
+      return false;
+    }
+    try {
+      const response = await fetch(validationUrl, {
+        method: "POST", credentials: "same-origin",
+        headers: {"Content-Type": "application/json"}, body: source
+      });
+      const data = await response.json();
+      if (version !== revision) return false;
+      if (!response.ok) {
+        show(data.error?.message || "Validation failed. Check your access and definition.");
+        return false;
+      }
+      validated = source;
+      save.disabled = busy;
+      show("Valid rule. Nothing has been saved or sent.");
+      return true;
+    } catch (error) {
+      if (version === revision) show("Validation unavailable. Your draft is unchanged. Try editing again.");
+      return false;
+    }
+  }
+  input.addEventListener("input", () => {
+    revision++;
+    validated = null;
+    save.disabled = true;
+    show("Checking definition...");
+    clearTimeout(timer);
+    const version = revision;
+    timer = setTimeout(() => validate(version), 300);
+  });
+  form.addEventListener("submit", async event => {
+    event.preventDefault();
+    if (busy || validated !== input.value) return;
+    busy = true;
+    save.disabled = true;
+    input.disabled = true;
+    const source = input.value;
+    try {
+      // Save endpoints revalidate and enforce conflicts even after live validation.
+      const response = await fetch(edit === null ? "/api/rules" : "/api/rules/" + encodeURIComponent(edit), {
+        method: edit === null ? "POST" : "PUT", credentials: "same-origin",
+        headers: {"Content-Type": "application/json"}, body: source
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        show(data.error?.message || "Save failed. Your draft is unchanged.");
+      } else {
+        show("Saved. Reloading rules...");
+        window.location.assign("/rules");
+      }
+    } catch (error) {
+      show("Save could not be confirmed. Check the rules list before retrying; your draft is unchanged.");
+    } finally {
+      busy = false;
+      input.disabled = false;
+      validated = null;
+      save.disabled = true;
+    }
+  });
+  validate(revision);
+})();
+</script>

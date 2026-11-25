@@ -28,7 +28,31 @@
       <p class="muted">Normalized definition, including predicates and transform when configured:</p>
     </div>
     <pre class="rule-definition">{{ rule | tojson(indent=2) }}</pre>
+    {% if entry.management == 'stored' %}
+    <a href="/rules?edit={{ rule.name | urlencode }}">Edit rule</a>
+    {% endif %}
   </details>
   {% endfor %}
   </section>
+  {% if can_create %}
+  <section aria-labelledby="editor-title">
+    <h2 id="editor-title">{{ 'Edit stored rule' if editing is not none else 'Add stored rule' }}</h2>
+    <p>Enter a complete JSON rule. Validation uses the server's rule parser without saving
+      or sending a webhook. Optional fields reset to defaults when omitted on save.
+      {% if editing is not none %}The rule name cannot be changed.{% endif %}</p>
+    <form id="rule-editor" data-editing="{{ editing if editing is not none else '' }}"
+          data-mode="{{ 'edit' if editing is not none else 'create' }}">
+      <label for="rule-json">Rule definition (JSON)</label>
+      <textarea id="rule-json" rows="22" spellcheck="false" style="width:100%;box-sizing:border-box"
+                aria-describedby="rule-status">{{ editor_definition | tojson(indent=2) }}</textarea>
+      <p id="rule-status" role="status" aria-live="polite">Checking definition...</p>
+      <button id="rule-save" type="submit" disabled>{{ 'Save changes' if editing is not none else 'Create rule' }}</button>
+      <a href="/rules">Cancel / new rule</a>
+    </form>
+    <p class="muted">Save activates the rule for subsequent events in this process.
+      Other processes need restart. Concurrent saves use the last committed definition.</p>
+    <noscript>JavaScript is required for live validation and saving. The administrative API remains available.</noscript>
+  </section>
+  {% endif %}
+  {% include "_rule_editor.html" %}
 {% endblock %}

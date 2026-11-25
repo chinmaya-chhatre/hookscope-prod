@@ -161,8 +161,8 @@ def test_rendering_never_forwards_or_writes_rules_events_or_history(store):
             for _ in range(2):
                 html = client.get("/rules").text
                 assert "Viewing it sends no webhooks and changes no rules." in html
-                assert "<form " not in html
-                assert "<button " not in html
+                assert 'id="rule-editor"' in html
+                assert 'id="rule-save" type="submit" disabled' in html
     assert calls == []
     assert (store.stored_rules(), store.rule_history(), store.count()) == before
 

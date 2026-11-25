@@ -14,10 +14,31 @@ the effective file definition is shown. An explicit application override shows
 only its supplied rules. The list follows the same order and definitions as
 `GET /api/rules`.
 
-This is a read-only view: opening or expanding a rule does not change it, send
-a webhook or create history. Use the existing administrative API to create,
-replace, pause or delete stored rules. Reload the page after a change. Other
-server processes retain their startup configuration until restarted, as before.
+Opening or expanding a rule does not change it, send a webhook or create history.
+Use **Add stored rule** or a stored rule's **Edit rule** link to edit its complete
+JSON definition. The initial example includes all supported settings. As you type,
+the server validates the draft with the same parser as the write API, after a
+short delay. Invalid JSON, bad targets, providers, predicates, transforms, retry
+settings and conflicting names keep Save disabled. Validation sends no webhook,
+stores no draft and creates no history. Drafts stay in the page, not browser storage.
+
+Save uses POST for creation or PUT for full replacement and rechecks all rules
+and conflicts. Editing cannot rename a rule. Omitted fields reset to defaults.
+File and application rules have no edit controls, and the server rejects attempts
+to edit them. Application overrides also hide creation. JavaScript is required;
+the administrative API remains available without it.
+
+Successful saves reload the list. A failed save retains the draft and requires
+another edit/validation before retrying. If a network failure leaves the save
+unconfirmed, check the rules list before retrying. Concurrent successful edits
+use the last committed definition. Other server processes retain their startup
+configuration until restarted, as before.
+
+`POST /api/rule-validation` accepts one named rule and returns its normalized
+definition. Supply `?edit=existing-name` when replacing an existing stored rule.
+It uses administrative authentication and returns the same error shape as writes,
+including 422 for invalid definitions, 409 for conflicts/read-only rules and 404
+for missing edits. Validation is advisory; it does not reserve a name or version.
 
 The page uses the same configured authentication as the dashboard and API.
 Definitions may include sensitive target URLs or transform constants; protect

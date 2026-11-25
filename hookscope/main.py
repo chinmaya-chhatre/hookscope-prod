@@ -682,7 +682,7 @@ def create_app(
             raise ApiError(409, "rule_read_only", "file rules cannot be changed through the API")
 
     @app.put(
-        "/api/rules/{name}",
+        "/api/rules/{name:path}",
         tags=["forwarding"],
         summary="Replace a stored forwarding rule",
         response_model=RuleOut,
@@ -709,7 +709,7 @@ def create_app(
             return rule.to_dict()
 
     @app.delete(
-        "/api/rules/{name}",
+        "/api/rules/{name:path}",
         tags=["forwarding"],
         summary="Delete a stored forwarding rule",
         response_model=RuleDeleteOut,
@@ -723,6 +723,34 @@ def create_app(
                 raise ApiError(404, "rule_not_found", "stored rule not found")
             rules = [rule for rule in rules if rule.name != name]
             return {"name": name, "deleted": True}
+
+    @app.post(
+        "/api/rule-validation",
+        tags=["forwarding"],
+        summary="Validate a rule without saving or sending",
+        response_model=RuleOut,
+        response_model_exclude_unset=True,
+        responses=error_responses(404, 409, 422),
+    )
+    def validate_rule(payload: Annotated[dict, Body()], edit: str | None = None) -> dict:
+        with rule_lock:
+            if explicit_rules:
+                raise ApiError(409, "rules_override", "rules are explicitly managed by the application")
+            if not isinstance(payload.get("name"), str) or not payload["name"].strip():
+                raise ApiError(422, "invalid_rule", "an explicit nonempty rule name is required")
+            try:
+                rule = parse_rules([payload])[0]
+            except (InvalidRuleError, TypeError) as exc:
+                raise ApiError(422, "invalid_rule", str(exc)) from exc
+            if edit is not None:
+                require_mutable_rule(edit)
+                if rule.name != edit:
+                    raise ApiError(422, "invalid_rule", "renaming is not supported")
+                if not any(existing.name == edit for existing in rules):
+                    raise ApiError(404, "rule_not_found", "stored rule not found")
+            elif any(existing.name == rule.name for existing in rules):
+                raise ApiError(409, "rule_exists", "a rule with this name already exists")
+            return rule.to_dict()
 
     @app.post(
         "/api/purge",
@@ -816,7 +844,7 @@ def create_app(
         summary="Forwarding rules dashboard",
         response_class=HTMLResponse,
     )
-    def rules_page(request: Request) -> HTMLResponse:
+    def rules_page(request: Request, edit: str | None = None) -> HTMLResponse:
         # A single reference keeps the rendered page consistent during API updates.
         snapshot = rules
         entries = [
@@ -829,10 +857,22 @@ def create_app(
             }
             for rule in snapshot
         ]
+        selected = next((rule for rule in snapshot if rule.name == edit), None)
+        if edit is not None:
+            require_mutable_rule(edit)
+            if selected is None:
+                raise ApiError(404, "rule_not_found", "stored rule not found")
+        definition = selected.to_dict() if selected else {
+            "name": "new-rule", "target_url": "https://example.com/webhooks",
+            "source": None, "event_types": [], "format": "raw", "enabled": True,
+            "where": [], "transform": None,
+            "retry": {"attempts": 1, "backoff_seconds": 1, "max_backoff_seconds": 60},
+        }
         return TEMPLATES.TemplateResponse(
             request,
             "rules.html",
-            {"rule_entries": entries, "transform_rules": {}},
+            {"rule_entries": entries, "transform_rules": {}, "can_create": not explicit_rules,
+             "editing": edit, "editor_definition": definition},
         )
 
     @app.get(
