@@ -69,9 +69,15 @@ def replay_event(
     """POST the stored body with its original headers (or ``headers``) to ``target_url``."""
     validate_target(target_url)
     headers = replay_headers(event) if headers is None else headers
+    request = client.build_request("POST", target_url, content=body_bytes(event), headers=headers)
+    return send_replay_request(request, client, target_url)
+
+
+def send_replay_request(request: httpx.Request, client: httpx.Client, target_url: str) -> ReplayResult:
+    """Send an already prepared request and record the usual replay outcome."""
     started = time.perf_counter()
     try:
-        response = client.post(target_url, content=body_bytes(event), headers=headers)
+        response = client.send(request)
     except httpx.HTTPError as exc:
         return ReplayResult(target_url, None, _elapsed_ms(started), error=f"{type(exc).__name__}: {exc}")
     return ReplayResult(

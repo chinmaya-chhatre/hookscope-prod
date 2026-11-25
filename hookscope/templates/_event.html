@@ -29,6 +29,20 @@
       {% if rule.where %}<pre>{{ rule.where | tojson(indent=2) }}</pre>{% endif %}
       {% else %}<p class="muted">No forwarding rules configured.</p>{% endfor %}
     </section>
+    {% if e.rule_preview %}
+    <form class="rule-dry-run" data-event-id="{{ e.id }}" aria-label="Test rule on event {{ e.id }}">
+      <label>Rule to test
+        <select name="rule" aria-label="Rule to test on event {{ e.id }}">
+          {% for rule in e.rule_preview %}<option value="{{ rule.name }}">{{ rule.name }}</option>{% endfor %}
+        </select>
+      </label>
+      <button type="submit">Test rule on this event</button>
+      <p class="muted">Dry run only. Shows prepared URL, headers and exact body bytes.
+        Credential headers and embedded URL credentials are redacted.</p>
+      <p class="rule-dry-run-note" role="status" aria-live="polite"></p>
+      <pre class="rule-dry-run-output" hidden></pre>
+    </form>
+    {% endif %}
     <pre>{{ e.pretty_body }}</pre>
     <pre>{% for k, v in e.headers.items() %}{{ k }}: {{ v }}
 {% endfor %}</pre>

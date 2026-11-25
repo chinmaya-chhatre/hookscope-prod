@@ -24,8 +24,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
-      - name: Test rule editor interactions
-        run: node --test tests/rule_editor.test.cjs
+      - name: Test dashboard rule interactions
+        run: node --test tests/*.test.cjs
       - name: Build and smoke-test installed wheel
         run: |
           pip install build

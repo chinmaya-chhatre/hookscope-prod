@@ -383,7 +383,9 @@ def test_dashboard_offers_only_rules_with_a_transform(preview_client):
     _stored(preview_client, {"type": "x"})
     html = preview_client.get("/").text
     assert '<option value="orders">Rule: orders</option>' in html
-    assert 'value="plain"' not in html
+    transform_form = html.split('<form class="preview"', 1)[1].split("</form>", 1)[0]
+    assert 'value="plain"' not in transform_form
+    assert '<option value="plain">plain</option>' in html  # available to the full-rule dry run
     orders = {"order": "$.data.id", "kind": "@event_type", "id": "@event_id"}
     assert _rule_transforms(html) == {"orders": orders}
     # Rule order is kept so an edited copy of the mapping builds the same document.

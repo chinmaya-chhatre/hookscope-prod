@@ -225,6 +225,28 @@ class PurgeOut(BaseModel):
     remaining: int
 
 
+class PreparedRuleRequestOut(BaseModel):
+    method: str
+    url: str = Field(description="Prepared URL with embedded user credentials removed.")
+    headers: list[tuple[str, str]] = Field(description="Prepared header pairs, with credentials redacted.")
+    redacted_headers: list[str]
+    body_text: str | None = Field(description="Exact UTF-8 text, or null for non-UTF-8 bytes.")
+    body_base64: str = Field(description="Exact prepared body bytes, always base64 encoded.")
+    body_bytes: int
+
+
+class RulePreviewOut(BaseModel):
+    event_id: int
+    rule: str
+    event_type: str | None
+    matches: bool
+    request: PreparedRuleRequestOut
+
+
+class RulePreviewRequest(BaseModel):
+    rule: str = Field(min_length=1, description="Current effective rule to inspect.")
+
+
 class TransformPreviewOut(BaseModel):
     event_id: int
     event_type: str | None

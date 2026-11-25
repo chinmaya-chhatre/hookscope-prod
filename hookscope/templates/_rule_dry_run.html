@@ -1,0 +1,43 @@
+<script>
+(() => {
+  for (const form of document.querySelectorAll("form.rule-dry-run")) {
+    const select = form.elements.rule;
+    const button = form.querySelector("button");
+    const note = form.querySelector(".rule-dry-run-note");
+    const output = form.querySelector(".rule-dry-run-output");
+    let busy = false;
+    form.addEventListener("submit", async event => {
+      event.preventDefault();
+      if (busy) return;
+      busy = true;
+      button.disabled = true;
+      select.disabled = true;
+      note.textContent = "Preparing request. Nothing will be sent...";
+      output.hidden = true;
+      output.textContent = "";
+      try {
+        const response = await fetch("/api/events/" + form.dataset.eventId + "/rule-preview", {
+          method: "POST", credentials: "same-origin",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({rule: select.value})
+        });
+        const data = await response.json();
+        if (!response.ok) {
+          note.textContent = data.error?.message || "Could not prepare the request.";
+        } else {
+          note.textContent = (data.matches ? "Matches." : "Does not match; request shown for inspection only.") +
+            " Nothing was sent or saved.";
+          output.textContent = JSON.stringify(data.request, null, 2);
+          output.hidden = false;
+        }
+      } catch (error) {
+        note.textContent = "Could not load the preview. Nothing was sent by this dry run.";
+      } finally {
+        busy = false;
+        select.disabled = false;
+        button.disabled = false;
+      }
+    });
+  }
+})();
+</script>

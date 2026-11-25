@@ -58,11 +58,12 @@ from .replay import (
     REPLAY_HEADER,
     InvalidTargetError,
     ReplayResult,
-    replay_event,
     replay_headers,
+    send_replay_request,
     validate_target,
 )
 from .slack import slack_message
+from .store import body_bytes
 from .transform import InvalidTransformError, apply_transform, validate_mapping
 
 FORWARD_HEADER = "X-HookScope-Forward"
@@ -301,6 +302,12 @@ def matching_rules(event: dict, rules: Iterable[ForwardRule]) -> list[ForwardRul
 
 def forward_event(event: dict, rule: ForwardRule, client: httpx.Client) -> ReplayResult:
     """POST the event to the rule's target with its original headers (or a Slack/transformed body)."""
+    return send_replay_request(forward_request(event, rule, client), client, rule.target_url)
+
+
+def forward_request(event: dict, rule: ForwardRule, client: httpx.Client) -> httpx.Request:
+    """Prepare the exact forwarding request without sending it or evaluating its match."""
+    validate_target(rule.target_url)
     if rule.format == "slack":
         document = slack_message(event, rule.name, event_type(event))
     elif rule.transform is not None:
@@ -312,12 +319,12 @@ def forward_event(event: dict, rule: ForwardRule, client: httpx.Client) -> Repla
         new_event = {**event, "body": json.dumps(document), "body_base64": None}
         headers = {"Content-Type": "application/json", FORWARD_HEADER: rule.name}
         _pass_on_request_id(headers, event)
-        return replay_event(new_event, rule.target_url, client, headers=headers)
+        return client.build_request("POST", rule.target_url, content=body_bytes(new_event), headers=headers)
     headers = replay_headers(event)
     headers.pop(REPLAY_HEADER, None)
     headers[FORWARD_HEADER] = rule.name
     _pass_on_request_id(headers, event)
-    return replay_event(event, rule.target_url, client, headers=headers)
+    return client.build_request("POST", rule.target_url, content=body_bytes(event), headers=headers)
 
 
 def _pass_on_request_id(headers: dict[str, str], event: dict) -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import re
@@ -10,6 +11,7 @@ from collections.abc import Callable
 from pathlib import Path
 from threading import RLock
 from typing import Annotated
+from urllib.parse import urlsplit
 
 import httpx
 from fastapi import BackgroundTasks, Body, FastAPI, Query, Request
@@ -31,6 +33,7 @@ from .rules import (
     deliver,
     event_type,
     forward_event,
+    forward_request,
     is_dead_letter,
     load_rules,
     matching_rules,
@@ -54,6 +57,8 @@ from .schemas import (
     RuleChangeOut,
     RuleDeleteOut,
     RuleOut,
+    RulePreviewOut,
+    RulePreviewRequest,
     SlackChallengeOut,
     TransformPreviewOut,
     TransformPreviewRequest,
@@ -836,6 +841,47 @@ def create_app(
             # Whether the rule would actually forward this event; null for an ad-hoc transform.
             "matches": rule.matches(event) if rule else None,
             "output": apply_transform(mapping, event, kind),
+        }
+
+    @app.post(
+        "/api/events/{event_id}/rule-preview",
+        tags=["forwarding"],
+        summary="Inspect a rule's prepared request without sending",
+        response_model=RulePreviewOut,
+        responses=error_responses(404, 422),
+    )
+    def preview_rule(event_id: EventId, payload: RulePreviewRequest) -> dict:
+        event = store.get(event_id)
+        if event is None:
+            raise ApiError(404, "event_not_found", "event not found")
+        rule = next((rule for rule in rules if rule.name == payload.rule), None)
+        if rule is None:
+            raise ApiError(404, "rule_not_found", "rule not found")
+        try:
+            prepared = forward_request(event, rule, http_client)
+        except (ValueError, UnicodeError, httpx.InvalidURL) as exc:
+            raise ApiError(422, "invalid_rule_preview", "rule cannot be prepared as an HTTP request") from exc
+        raw = prepared.content
+        try:
+            body_text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            body_text = None
+        sensitive = {"authorization", "proxy-authorization", "cookie", "set-cookie"}
+        hidden = [name for name in prepared.headers if name.lower() in sensitive]
+        headers = [
+            [name, "[redacted]" if name.lower() in sensitive else value]
+            for name, value in prepared.headers.multi_items()
+        ]
+        url = urlsplit(str(prepared.url))
+        safe_url = url._replace(netloc=url.netloc.rsplit("@", 1)[-1]).geturl()
+        return {
+            "event_id": event_id, "rule": rule.name, "matches": rule.matches(event),
+            "event_type": event_type(event),
+            "request": {
+                "method": prepared.method, "url": safe_url, "headers": headers,
+                "redacted_headers": hidden, "body_text": body_text,
+                "body_base64": base64.b64encode(raw).decode("ascii"), "body_bytes": len(raw),
+            },
         }
 
     @app.get(
