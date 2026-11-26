@@ -178,6 +178,7 @@ class RetryPolicyOut(BaseModel):
 
 
 class RuleOut(BaseModel):
+    headers: dict[str, str] = Field(default_factory=dict, description="Custom outbound header templates.")
     enabled: bool = Field(default=True, strict=True, description="False pauses rule forwarding.")
     where: list[dict[str, Any]] = Field(default_factory=list)
     name: str
@@ -192,6 +193,8 @@ class RuleOut(BaseModel):
     def serialize_rule(self, handler):
         """Omit default values introduced after the original response contract."""
         data = handler(self)
+        if not self.headers:
+            data.pop("headers", None)
         if not self.where:
             data.pop("where", None)
         if self.enabled:

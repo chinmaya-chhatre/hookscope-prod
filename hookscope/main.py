@@ -932,7 +932,7 @@ def create_app(
         if rule is None:
             raise ApiError(404, "rule_not_found", "rule not found")
         try:
-            prepared = forward_request(event, rule, http_client)
+            prepared = forward_request(event, rule, http_client, preview=True)
         except (ValueError, UnicodeError, httpx.InvalidURL) as exc:
             raise ApiError(422, "invalid_rule_preview", "rule cannot be prepared as an HTTP request") from exc
         raw = prepared.content
@@ -941,6 +941,7 @@ def create_app(
         except UnicodeDecodeError:
             body_text = None
         sensitive = {"authorization", "proxy-authorization", "cookie", "set-cookie"}
+        sensitive.update(name.lower() for name in rule.headers)
         hidden = [name for name in prepared.headers if name.lower() in sensitive]
         headers = [
             [name, "[redacted]" if name.lower() in sensitive else value]

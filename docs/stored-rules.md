@@ -216,3 +216,36 @@ forwards retain their selected definitions. If a response is lost, inspect the r
 list and history before retrying: the transaction may already have committed.
 The dashboard retains the pasted draft on errors and never retries automatically.
 
+## Custom forwarding headers
+
+A rule can set outbound request headers in raw, transformed, or Slack mode:
+
+```json
+{
+  "name": "billing",
+  "target_url": "https://billing.example.com/webhooks",
+  "headers": {
+    "Authorization": "Bearer ${env:HOOKSCOPE_FORWARD_BILLING_TOKEN}",
+    "X-Integration": "billing"
+  }
+}
+```
+
+Set `HOOKSCOPE_FORWARD_BILLING_TOKEN` in the HookScope process environment.
+Use only environment variables dedicated to forwarding, with the
+`HOOKSCOPE_FORWARD_` prefix. Values resolve on each attempt, including manual
+resend. Missing, empty, or invalid values cause a failed attempt before any
+request reaches the target. Header values must be ASCII and cannot contain
+line breaks or leading or trailing whitespace.
+
+Custom headers replace existing headers case-insensitively. Connection and
+framing headers, proxy credentials, request IDs and HookScope's own headers
+are reserved. Forwards with custom headers do not follow redirects, and omit
+the target response body and transport error details from the result because
+they may echo credentials. Configure the final HTTPS destination directly.
+
+Admin API responses, exports, history, and the editor retain the configuration
+templates. Use environment references for credentials because literal values
+are visible in those definitions. Request previews redact custom header values
+without looking up environment variables. Only administrators who are trusted
+to configure the forwarding destinations should have rule editing access.

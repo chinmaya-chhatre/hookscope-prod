@@ -45,6 +45,8 @@ from __future__ import annotations
 
 import heapq
 import json
+import os
+import re
 import time
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
@@ -72,6 +74,13 @@ FORMATS = ("raw", "slack")
 RETRYABLE_STATUS_CODES = {408, 425, 429}
 MAX_ATTEMPTS = 10
 MAX_BACKOFF_SECONDS = 3600.0
+HEADER_NAME = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+")
+HEADER_ENV = re.compile(r"\$\{env:(HOOKSCOPE_FORWARD_[A-Z0-9_]+)\}")
+RESERVED_HEADERS = {
+    "host", "content-length", "transfer-encoding", "connection", "keep-alive", "te",
+    "trailer", "upgrade", "expect", "proxy-authorization", "proxy-authenticate",
+    "proxy-connection", "x-request-id", REPLAY_HEADER.lower(), FORWARD_HEADER.lower(),
+}
 
 
 class InvalidRuleError(ValueError):
@@ -137,6 +146,7 @@ class ForwardRule:
 
     where: tuple[dict, ...] = ()
     enabled: bool = True
+    headers: dict[str, str] = field(default_factory=dict)
 
     def matches(self, event: dict) -> bool:
         if not self.enabled or event["verification"] not in FORWARDABLE_STATUSES:
@@ -158,6 +168,7 @@ class ForwardRule:
             "retry": self.retry.to_dict(),
             **({"where": list(self.where)} if self.where else {}),
             **({"enabled": False} if not self.enabled else {}),
+            **({"headers": dict(self.headers)} if self.headers else {}),
         }
 
 
@@ -244,10 +255,52 @@ def parse_rules(data: object) -> list[ForwardRule]:
             where = validate_where(raw.get("where", []))
         except ValueError as exc:
             raise InvalidRuleError(f"rule '{name}': {exc}") from exc
+        headers = parse_forward_headers(raw.get("headers", {}))
         rules.append(
-            ForwardRule(name, target_url, source, tuple(event_types), fmt, transform, retry, where, enabled)
+            ForwardRule(
+                name, target_url, source, tuple(event_types), fmt, transform, retry, where, enabled,
+                headers=headers,
+            )
         )
     return rules
+
+
+def _valid_header_value(value: str) -> bool:
+    return all(char == "\t" or " " <= char <= "~" for char in value)
+
+
+def parse_forward_headers(raw: object) -> dict[str, str]:
+    """Keep templates in rule definitions and reject ambiguous or unsafe headers."""
+    if not isinstance(raw, dict):
+        raise InvalidRuleError("headers must be an object mapping names to strings")
+    headers: dict[str, str] = {}
+    for name, value in raw.items():
+        if not isinstance(name, str) or HEADER_NAME.fullmatch(name) is None:
+            raise InvalidRuleError("invalid custom header name")
+        lower = name.lower()
+        if lower in RESERVED_HEADERS or lower.startswith("x-hookscope-") or lower in headers:
+            raise InvalidRuleError("reserved or duplicated custom header name")
+        if not isinstance(value, str) or not _valid_header_value(value):
+            raise InvalidRuleError("custom header values must be HTTP-safe ASCII strings")
+        if value != value.strip(" \t"):
+            raise InvalidRuleError("custom header values cannot start or end with whitespace")
+        if "${" in HEADER_ENV.sub("", value):
+            raise InvalidRuleError("header references must use ${env:HOOKSCOPE_FORWARD_NAME}")
+        headers[lower] = value
+    return headers
+
+
+def _resolve_forward_headers(templates: dict[str, str]) -> dict[str, str]:
+    def lookup(match: re.Match[str]) -> str:
+        value = os.environ.get(match[1])
+        if not value or not _valid_header_value(value):
+            raise InvalidRuleError("custom header environment value is missing or invalid")
+        return value
+
+    resolved = {name: HEADER_ENV.sub(lookup, value) for name, value in templates.items()}
+    if any(value != value.strip(" \t") for value in resolved.values()):
+        raise InvalidRuleError("custom header values cannot start or end with whitespace")
+    return resolved
 
 
 def parse_retry(raw: object, name: str) -> RetryPolicy:
@@ -302,10 +355,16 @@ def matching_rules(event: dict, rules: Iterable[ForwardRule]) -> list[ForwardRul
 
 def forward_event(event: dict, rule: ForwardRule, client: httpx.Client) -> ReplayResult:
     """POST the event to the rule's target with its original headers (or a Slack/transformed body)."""
-    return send_replay_request(forward_request(event, rule, client), client, rule.target_url)
+    try:
+        request = forward_request(event, rule, client)
+    except InvalidRuleError as exc:
+        return ReplayResult(rule.target_url, None, 0, error=str(exc))
+    return send_replay_request(request, client, rule.target_url, sensitive=bool(rule.headers))
 
 
-def forward_request(event: dict, rule: ForwardRule, client: httpx.Client) -> httpx.Request:
+def forward_request(
+    event: dict, rule: ForwardRule, client: httpx.Client, *, preview: bool = False
+) -> httpx.Request:
     """Prepare the exact forwarding request without sending it or evaluating its match."""
     validate_target(rule.target_url)
     if rule.format == "slack":
@@ -318,13 +377,18 @@ def forward_request(event: dict, rule: ForwardRule, client: httpx.Client) -> htt
         # The new JSON document replaces the original bytes too.
         new_event = {**event, "body": json.dumps(document), "body_base64": None}
         headers = {"Content-Type": "application/json", FORWARD_HEADER: rule.name}
-        _pass_on_request_id(headers, event)
-        return client.build_request("POST", rule.target_url, content=body_bytes(new_event), headers=headers)
-    headers = replay_headers(event)
-    headers.pop(REPLAY_HEADER, None)
-    headers[FORWARD_HEADER] = rule.name
+    else:
+        new_event = event
+        headers = replay_headers(event)
+        headers.pop(REPLAY_HEADER, None)
+        headers[FORWARD_HEADER] = rule.name
     _pass_on_request_id(headers, event)
-    return client.build_request("POST", rule.target_url, content=body_bytes(event), headers=headers)
+    if rule.headers:
+        templates = parse_forward_headers(rule.headers)
+        overrides = dict.fromkeys(templates, "[redacted]") if preview else _resolve_forward_headers(templates)
+        headers = {name: value for name, value in headers.items() if name.lower() not in overrides}
+        headers.update(overrides)
+    return client.build_request("POST", rule.target_url, content=body_bytes(new_event), headers=headers)
 
 
 def _pass_on_request_id(headers: dict[str, str], event: dict) -> None:

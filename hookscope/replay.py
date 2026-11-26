@@ -73,18 +73,25 @@ def replay_event(
     return send_replay_request(request, client, target_url)
 
 
-def send_replay_request(request: httpx.Request, client: httpx.Client, target_url: str) -> ReplayResult:
+def send_replay_request(
+    request: httpx.Request, client: httpx.Client, target_url: str, *, sensitive: bool = False
+) -> ReplayResult:
     """Send an already prepared request and record the usual replay outcome."""
     started = time.perf_counter()
     try:
-        response = client.send(request)
+        # A redirect could carry a custom credential to a different receiver.
+        if sensitive:
+            response = client.send(request, follow_redirects=False, auth=None)
+        else:
+            response = client.send(request)
     except httpx.HTTPError as exc:
-        return ReplayResult(target_url, None, _elapsed_ms(started), error=f"{type(exc).__name__}: {exc}")
+        error = type(exc).__name__ if sensitive else f"{type(exc).__name__}: {exc}"
+        return ReplayResult(target_url, None, _elapsed_ms(started), error=error)
     return ReplayResult(
         target_url,
         response.status_code,
         _elapsed_ms(started),
-        response_body=response.text[:MAX_RESPONSE_CHARS],
+        response_body="" if sensitive else response.text[:MAX_RESPONSE_CHARS],
         retry_after=parse_retry_after(response.headers.get("retry-after")),
     )
 
