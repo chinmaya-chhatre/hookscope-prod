@@ -59,6 +59,7 @@ from .schemas import (
     RuleOut,
     RulePreviewOut,
     RulePreviewRequest,
+    RuleTransferOut,
     SlackChallengeOut,
     TransformPreviewOut,
     TransformPreviewRequest,
@@ -618,6 +619,79 @@ def create_app(
     )
     def list_rules() -> list[dict]:
         return [rule.to_dict() for rule in rules]
+
+    @app.get(
+        "/api/rules/export",
+        tags=["forwarding"],
+        summary="Export effective forwarding rules as JSON",
+        response_model=RuleTransferOut,
+    )
+    def export_rules(response: Response) -> dict:
+        response.headers["Content-Disposition"] = 'attachment; filename="hookscope-rules.json"'
+        response.headers["Cache-Control"] = "no-store"
+        return {"rules": [rule.to_dict() for rule in rules]}
+
+    @app.post(
+        "/api/rules/import",
+        tags=["forwarding"],
+        summary="Import new stored rules atomically",
+        response_model=RuleTransferOut,
+        status_code=201,
+        responses=error_responses(409, 413, 422),
+        openapi_extra={"requestBody": {
+            "required": True,
+            "content": {"application/json": {"schema": {
+                "type": "object", "required": ["rules"], "additionalProperties": False,
+                "properties": {"rules": {
+                    "type": "array", "minItems": 1, "maxItems": 100,
+                    "items": {"$ref": "#/components/schemas/RuleOut"},
+                }},
+            }}},
+        }},
+    )
+    async def import_rules(request: Request) -> dict:
+        nonlocal rules
+        if explicit_rules:
+            raise ApiError(409, "rules_override", "rules are explicitly managed by the application")
+        try:
+            raw = await read_body_limited(request, min(body_limit, 1024 * 1024))
+        except BodyTooLargeError as exc:
+            raise ApiError(413, "payload_too_large", "rule import exceeds the byte limit") from exc
+
+        def unique_object(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError("duplicate JSON object key")
+                result[key] = value
+            return result
+
+        def invalid_constant(value):
+            raise ValueError("non-finite JSON numbers are not supported")
+
+        try:
+            payload = json.loads(raw, object_pairs_hook=unique_object, parse_constant=invalid_constant)
+            if not isinstance(payload, dict) or set(payload) != {"rules"}:
+                raise InvalidRuleError("expected an object containing only a rules list")
+            definitions = payload["rules"]
+            if not isinstance(definitions, list) or not 1 <= len(definitions) <= 100:
+                raise InvalidRuleError("import requires from 1 to 100 rules")
+            for definition in definitions:
+                if (not isinstance(definition, dict)
+                        or not isinstance(definition.get("name"), str)
+                        or not definition["name"].strip()):
+                    raise InvalidRuleError("each rule requires an explicit nonempty name")
+            imported = parse_rules(definitions)
+        except (ValueError, TypeError, UnicodeError, RecursionError) as exc:
+            raise ApiError(422, "invalid_rules", str(exc)) from exc
+        with rule_lock:
+            names = {rule.name for rule in imported}
+            if names.intersection(rule.name for rule in rules):
+                raise ApiError(409, "rule_exists", "an imported name already exists")
+            if not store.import_rules(definitions, actor=rule_actor(request)):
+                raise ApiError(409, "rule_exists", "an imported stored name already exists")
+            rules = [*rules, *imported]
+            return {"rules": [rule.to_dict() for rule in imported]}
 
     @app.post(
         "/api/rules",

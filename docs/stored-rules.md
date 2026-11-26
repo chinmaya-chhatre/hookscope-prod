@@ -179,3 +179,40 @@ Event-retention settings do not expire it. Include it in database backups and
 access controls, and plan disk capacity accordingly. There is no history
 deletion API or dashboard in this interface. It is not a tamper-proof audit log:
 a principal with database write access can alter the database.
+
+## Transfer rules as JSON
+
+Use **Export effective rules** on the Rules page, or `GET /api/rules/export`,
+to download `hookscope-rules.json`. The document is `{"rules": [...]}` with the
+same normalized definitions as the rules API. It includes enabled and paused
+rules, filters, transforms, targets, and retry policies. File and application
+rules export too, without their management origin. History and captured events
+are excluded. Downloads can contain sensitive target URLs and transform values;
+store and share them accordingly. Both transfer endpoints require the configured
+administrative authentication.
+
+Paste the document into **Import new rules** on the Rules page, or send it as
+JSON to `POST /api/rules/import`. A successful response is HTTP 201 with the
+normalized imported `rules` list. This is a create-only operation: every name
+must be explicit, nonempty, unique in the document, and absent from existing
+effective and stored rules. A conflict returns 409. Invalid JSON or definitions
+return 422. No rule is overwritten, deleted, or imported partially. Definitions
+and their creation history commit in one transaction; import sends no webhooks.
+The imported rules become stored rules, including definitions exported from a
+file on another installation.
+
+Import accepts 1 to 100 rules and a body no larger than the smaller of 1 MiB and
+the configured request body limit (413 when exceeded). The top-level object must
+contain only `rules`; duplicate JSON object keys and non-finite numbers are
+rejected. Empty exports are valid backups but have nothing to import. To copy a
+large export, divide it into batches; each batch is independently atomic.
+Imports are unavailable when rules were explicitly supplied by the embedding
+application. Existing file rules remain read-only. Choose a new destination or
+rename intended copies before importing an export that conflicts with existing names.
+
+Imported rules activate for subsequent events in the receiving process. Other
+processes must restart to load them, just as for individual rule creation. In-flight
+forwards retain their selected definitions. If a response is lost, inspect the rule
+list and history before retrying: the transaction may already have committed.
+The dashboard retains the pasted draft on errors and never retries automatically.
+

@@ -199,6 +199,10 @@ class RuleOut(BaseModel):
         return data
 
 
+class RuleTransferOut(BaseModel):
+    rules: list[RuleOut]
+
+
 class RuleChangeOut(BaseModel):
     id: int = Field(description="Monotonic history cursor, independent of event ids.")
     name: str

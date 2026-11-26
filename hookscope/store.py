@@ -129,6 +129,28 @@ class EventStore:
                 _record_rule_change(conn, rule.name, actor, before, rule.to_dict())
             return cursor.rowcount == 1
 
+    def import_rules(self, definitions: list[dict], *, actor: str = "programmatic") -> bool:
+        """Create a whole batch with history, or leave the database unchanged on conflict."""
+        from .rules import InvalidRuleError, parse_rules
+
+        if not definitions:
+            raise InvalidRuleError("at least one rule is required")
+        for definition in definitions:
+            _validated_rule(definition)
+        validated = parse_rules(definitions)
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            for rule in validated:
+                if conn.execute("SELECT 1 FROM rules WHERE name = ?", (rule.name,)).fetchone():
+                    return False
+            for rule in validated:
+                conn.execute(
+                    "INSERT INTO rules (name, definition) VALUES (?, ?)",
+                    (rule.name, json.dumps(rule.to_dict())),
+                )
+                _record_rule_change(conn, rule.name, actor, None, rule.to_dict())
+        return True
+
     def replace_rule(self, definition: dict, *, actor: str = "programmatic") -> bool:
         """Replace an existing named definition atomically; never insert a missing rule."""
         rule = _validated_rule(definition)

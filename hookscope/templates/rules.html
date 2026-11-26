@@ -2,8 +2,27 @@
 {% block title %}Forwarding rules · HookScope{% endblock %}
 {% block content %}
   <h1>Forwarding rules</h1>
+  <section aria-labelledby="transfer-title">
+    <h2 id="transfer-title">Import and export JSON</h2>
+    <p><a href="/api/rules/export" download="hookscope-rules.json">Export effective rules</a></p>
+    <p>Exports include target URLs and configured transform values. Keep the downloaded file private.
+      File and application definitions export as ordinary rules without their management origin.</p>
+    {% if can_create %}
+    <form id="rule-import">
+      <label for="rule-import-json">Rules document (JSON object with a rules list)</label>
+      <textarea id="rule-import-json" rows="8" spellcheck="false"
+                style="width:100%;box-sizing:border-box" aria-describedby="rule-import-status"></textarea>
+      <p>Creates up to 100 new stored rules together. Existing names are never overwritten.
+        Any invalid rule or name conflict rejects the entire import. Importing sends no webhooks.</p>
+      <button id="rule-import-submit" type="submit">Import new rules</button>
+      <p id="rule-import-status" role="status" aria-live="polite"></p>
+    </form>
+    <noscript>Use the administrative import API when JavaScript is disabled.</noscript>
+    {% endif %}
+  </section>
   <p class="muted">{{ rule_entries | length }} effective rules in this process. Reload to see changes.</p>
-  <p class="muted">This page only displays configuration. Viewing it sends no webhooks and changes no rules.</p>
+  <p class="muted">Viewing it sends no webhooks and changes no rules.
+    Importing or saving activates rules for subsequent events.</p>
   {% if not rule_entries %}
     <p class="muted">No forwarding rules configured. Load a rules file or create a stored rule through the API.</p>
   {% endif %}
@@ -55,4 +74,5 @@
   </section>
   {% endif %}
   {% include "_rule_editor.html" %}
+  {% include "_rule_import.html" %}
 {% endblock %}

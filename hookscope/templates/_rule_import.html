@@ -1,0 +1,52 @@
+<script>
+(() => {
+  const form = document.getElementById("rule-import");
+  if (!form) return;
+  const input = document.getElementById("rule-import-json");
+  const button = document.getElementById("rule-import-submit");
+  const status = document.getElementById("rule-import-status");
+  let busy = false;
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (busy) return;
+    const source = input.value;
+    try {
+      if (new TextEncoder().encode(source).length > 1048576) {
+        throw new Error("Document exceeds 1 MiB.");
+      }
+      const payload = JSON.parse(source);
+      if (!payload || Array.isArray(payload) || !Array.isArray(payload.rules)
+          || payload.rules.length < 1 || payload.rules.length > 100) {
+        throw new Error("Use an object containing a rules list with 1 to 100 entries.");
+      }
+    } catch (error) {
+      status.textContent = "Invalid document: " + error.message;
+      return;
+    }
+    busy = true;
+    button.disabled = true;
+    input.disabled = true;
+    status.textContent = "Importing rules...";
+    try {
+      const response = await fetch("/api/rules/import", {
+        method: "POST", credentials: "same-origin",
+        headers: {"Content-Type": "application/json"}, body: source
+      });
+      if (!response.ok) {
+        status.textContent = "Import was not confirmed (HTTP " + response.status
+          + "). Inspect the rule list before retrying. The draft has been retained.";
+        return;
+      }
+      status.textContent = "Imported. Reloading rules...";
+      window.location.assign("/rules");
+    } catch (_) {
+      status.textContent = "Import was not confirmed. Inspect the rule list before retrying. "
+        + "The draft has been retained.";
+    } finally {
+      busy = false;
+      button.disabled = false;
+      input.disabled = false;
+    }
+  });
+})();
+</script>
