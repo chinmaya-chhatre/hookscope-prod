@@ -74,6 +74,8 @@ FORMATS = ("raw", "slack")
 RETRYABLE_STATUS_CODES = {408, 425, 429}
 MAX_ATTEMPTS = 10
 MAX_BACKOFF_SECONDS = 3600.0
+MIN_FORWARD_TIMEOUT_SECONDS = 0.001
+MAX_FORWARD_TIMEOUT_SECONDS = 120.0
 HEADER_NAME = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+")
 HEADER_ENV = re.compile(r"\$\{env:(HOOKSCOPE_FORWARD_[A-Z0-9_]+)\}")
 RESERVED_HEADERS = {
@@ -147,6 +149,7 @@ class ForwardRule:
     where: tuple[dict, ...] = ()
     enabled: bool = True
     headers: dict[str, str] = field(default_factory=dict)
+    timeout_seconds: float | None = None
 
     def matches(self, event: dict) -> bool:
         if not self.enabled or event["verification"] not in FORWARDABLE_STATUSES:
@@ -169,6 +172,7 @@ class ForwardRule:
             **({"where": list(self.where)} if self.where else {}),
             **({"enabled": False} if not self.enabled else {}),
             **({"headers": dict(self.headers)} if self.headers else {}),
+            **({"timeout_seconds": self.timeout_seconds} if self.timeout_seconds is not None else {}),
         }
 
 
@@ -256,10 +260,17 @@ def parse_rules(data: object) -> list[ForwardRule]:
         except ValueError as exc:
             raise InvalidRuleError(f"rule '{name}': {exc}") from exc
         headers = parse_forward_headers(raw.get("headers", {}))
+        timeout = raw.get("timeout_seconds")
+        if timeout is not None and (
+            type(timeout) not in (int, float)
+            or not MIN_FORWARD_TIMEOUT_SECONDS <= timeout <= MAX_FORWARD_TIMEOUT_SECONDS
+        ):
+            raise InvalidRuleError(f"rule '{name}': timeout_seconds must be a number between 0.001 and 120")
         rules.append(
             ForwardRule(
                 name, target_url, source, tuple(event_types), fmt, transform, retry, where, enabled,
                 headers=headers,
+                timeout_seconds=float(timeout) if timeout is not None else None,
             )
         )
     return rules
@@ -388,7 +399,13 @@ def forward_request(
         overrides = dict.fromkeys(templates, "[redacted]") if preview else _resolve_forward_headers(templates)
         headers = {name: value for name, value in headers.items() if name.lower() not in overrides}
         headers.update(overrides)
-    return client.build_request("POST", rule.target_url, content=body_bytes(new_event), headers=headers)
+    # Request options isolate this rule from other users of the shared client.
+    extensions = None
+    if rule.timeout_seconds is not None:
+        extensions = {"timeout": httpx.Timeout(rule.timeout_seconds).as_dict()}
+    return client.build_request(
+        "POST", rule.target_url, content=body_bytes(new_event), headers=headers, extensions=extensions
+    )
 
 
 def _pass_on_request_id(headers: dict[str, str], event: dict) -> None:

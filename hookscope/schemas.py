@@ -178,6 +178,12 @@ class RetryPolicyOut(BaseModel):
 
 
 class RuleOut(BaseModel):
+    timeout_seconds: float | None = Field(
+        default=None,
+        ge=0.001,
+        le=120,
+        description="Per-operation forwarding timeout in seconds. Null uses the HTTP client default.",
+    )
     headers: dict[str, str] = Field(default_factory=dict, description="Custom outbound header templates.")
     enabled: bool = Field(default=True, strict=True, description="False pauses rule forwarding.")
     where: list[dict[str, Any]] = Field(default_factory=list)
@@ -193,6 +199,8 @@ class RuleOut(BaseModel):
     def serialize_rule(self, handler):
         """Omit default values introduced after the original response contract."""
         data = handler(self)
+        if self.timeout_seconds is None:
+            data.pop("timeout_seconds", None)
         if not self.headers:
             data.pop("headers", None)
         if not self.where:

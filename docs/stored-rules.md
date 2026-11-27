@@ -249,3 +249,16 @@ templates. Use environment references for credentials because literal values
 are visible in those definitions. Request previews redact custom header values
 without looking up environment variables. Only administrators who are trusted
 to configure the forwarding destinations should have rule editing access.
+
+## Set a forwarding timeout
+
+Set `"timeout_seconds": 2.5` in a file-backed or stored rule to override
+the HTTP client timeout for every forward attempt. Use a JSON number between
+0.001 and 120 seconds, inclusive. Omit the field or set it to `null` to use
+the client default, which is 10 seconds in the standard server.
+
+The limit applies separately to HTTP connect, read, write, and connection
+pool waits. It is not a total delivery deadline. Timeouts count as transient
+failures and use the rule's existing retry policy. The override applies to
+automatic forwarding and redriving that rule. Manual replays use the client
+default.
